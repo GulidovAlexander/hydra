@@ -15,7 +15,7 @@ export function BadgesBox() {
   const tooltipId = useId();
   const [showAllBadgesModal, setShowAllBadgesModal] = useState(false);
 
-  if (!userProfile?.badges.length) return null;
+  if (!userProfile?.badges?.length) return null;
 
   const visibleBadges = userProfile.badges.slice(0, MAX_VISIBLE_BADGES);
   const hasMoreBadges = userProfile.badges.length > MAX_VISIBLE_BADGES;

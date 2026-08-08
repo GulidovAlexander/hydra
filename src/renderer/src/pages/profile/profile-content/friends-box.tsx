@@ -19,7 +19,7 @@ export function FriendsBox() {
   const [showAddFriendModal, setShowAddFriendModal] = useState(false);
 
   const isMe = userDetails?.id === userProfile?.id;
-  const hasFriends = userProfile?.friends && userProfile.friends.length > 0;
+  const hasFriends = (userProfile?.friends?.length ?? 0) > 0;
 
   const getGameImage = (game: { iconUrl: string | null; title: string }) => {
     if (game.iconUrl) {
@@ -36,7 +36,7 @@ export function FriendsBox() {
     return <SteamLogo width={16} height={16} />;
   };
 
-  if (!hasFriends) {
+  if (!userProfile || !hasFriends) {
     if (!isMe) return null;
 
     return (
