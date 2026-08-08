@@ -9,6 +9,7 @@ import {
 import { createGame } from "@main/services/library-sync";
 import { downloadsSublevel, gamesSublevel, levelKeys } from "@main/level";
 import {
+  getGlobalTrackers,
   handleDownloadError,
   isKnownDownloadError,
   prepareGameEntry,
@@ -37,29 +38,31 @@ const startGameDownload = async (
     `[Downloads] Start requested for ${gameKey} (downloader=${downloader})`
   );
 
-  const download: Download = {
-    shop,
-    objectId,
-    status: "paused",
-    progress: 0,
-    bytesDownloaded: 0,
-    downloadPath,
-    downloader,
-    uri,
-    folderName: null,
-    shouldSeed: false,
-    timestamp: Date.now(),
-    queued: true,
-    pinnedToHero: false,
-    extracting: false,
-    automaticallyExtract,
-    automaticallyDeleteArchiveFiles,
-    fileIndices,
-    selectedFilesSize,
-    fileSize: selectedFilesSize ?? null,
-  };
-
   try {
+    const globalTrackers = await getGlobalTrackers();
+
+    const download: Download = {
+      shop,
+      objectId,
+      status: "paused",
+      progress: 0,
+      bytesDownloaded: 0,
+      downloadPath,
+      downloader,
+      uri,
+      folderName: null,
+      shouldSeed: false,
+      timestamp: Date.now(),
+      queued: true,
+      pinnedToHero: false,
+      extracting: false,
+      automaticallyExtract,
+      automaticallyDeleteArchiveFiles,
+      fileIndices,
+      selectedFilesSize,
+      fileSize: selectedFilesSize ?? null,
+      customTrackers: globalTrackers,
+    };
     await DownloadManager.validateDownloadUrl(download);
     await prepareGameEntry({ gameKey, title, objectId, shop });
     await DownloadManager.cancelDownload(gameKey);

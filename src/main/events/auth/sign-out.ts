@@ -5,8 +5,8 @@ import {
   SSEClient,
   WindowManager,
   emulators,
-  gamesPlaytime,
 } from "@main/services";
+import { clearGamesPlaytimeState } from "@main/services/game-running-state";
 import {
   db,
   downloadLayoutStateSublevel,
@@ -30,12 +30,13 @@ const signOut = async (_event: Electron.IpcMainInvokeEvent) => {
         key: levelKeys.user,
       },
     ])
-    .then(async () => {
-      gamesPlaytime.clear();
+.then(() => {
+      /* Removes all games being played */
+      clearGamesPlaytimeState();
 
       if (isSelfHostedActive) return;
 
-      await Promise.all([
+      return Promise.all([
         gamesSublevel.clear(),
         downloadsSublevel.clear(),
         downloadLayoutStateSublevel.clear(),

@@ -19,7 +19,7 @@ const PREFETCH_CONCURRENCY = 5;
 const LOCAL_CACHE_EXPIRATION = 1000 * 60 * 60 * 8;
 const prefetchAttempted = new Set<string>();
 
-const lookupCachedPlatform = async (
+export const lookupCachedPlatform = async (
   gameKey: string
 ): Promise<string | null> => {
   const prefix = `${gameKey}:`;
@@ -170,6 +170,7 @@ const getLibrary = async (): Promise<LibraryGame[]> => {
           // Spread composed assets last to ensure all image URLs are properly set
           ...composedAssets,
           title: composedAssets?.title || game.title,
+          platform: game.platform ?? null,
           // Preserve custom image URLs from game if they exist
           customIconUrl: game.customIconUrl,
           customLogoImageUrl: game.customLogoImageUrl,
