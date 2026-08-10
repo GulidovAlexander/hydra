@@ -8,6 +8,7 @@ import type {
   CloudSaveAutomaticSyncMode,
   CloudSaveAutomaticSyncModeChangedEvent,
   GameShop,
+  UserPreferences,
 } from "@types";
 
 import { WindowManager } from "../window-manager";
@@ -15,6 +16,7 @@ import { assertCloudSaveSubscription } from "./cloud-save-access";
 import {
   getCloudSaveAutomaticSyncStateForMode,
   getNextCloudSaveAutomaticSyncMode,
+  resolveCloudSaveAutomaticSyncMode,
   resolveStoredCloudSaveAutomaticSyncModeForShop,
 } from "./automatic-sync-mode";
 
@@ -38,21 +40,36 @@ const notifyAutomaticSyncModeChanged = (
   WindowManager.sendToAppWindows("on-library-batch-complete");
 };
 
+const getPreferredCloudSaveVersion = async (): Promise<"v1" | "v2"> => {
+  const prefs = await db.get<string, UserPreferences | null>(
+    levelKeys.userPreferences,
+    { valueEncoding: "json" }
+  );
+  return prefs?.cloudSavesVersion ?? "v2";
+};
+
 const readCloudSaveAutomaticSyncMode = async (
   objectId: string,
   shop: GameShop
 ) => {
   const key = getAutomaticSyncKey(shop, objectId);
-  const [storedV2Enabled, game] = await Promise.all([
+  const [storedV2Enabled, game, preferredVersion] = await Promise.all([
     cloudSaveAutomaticSyncSettingsSublevel.get(key),
     gamesSublevel.get(key),
+    getPreferredCloudSaveVersion(),
   ]);
   const legacyEnabled = game?.automaticCloudSync === true;
-  const mode = resolveStoredCloudSaveAutomaticSyncModeForShop(
-    shop,
-    legacyEnabled,
-    storedV2Enabled
-  );
+  const mode =
+    preferredVersion === "v1"
+      ? resolveCloudSaveAutomaticSyncMode({
+          legacyEnabled,
+          v2Enabled: false,
+        })
+      : resolveStoredCloudSaveAutomaticSyncModeForShop(
+          shop,
+          legacyEnabled,
+          storedV2Enabled
+        );
 
   return { game, key, mode };
 };

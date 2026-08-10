@@ -2,6 +2,7 @@ import type { GameShop } from "@types";
 
 export type CloudSaveUiMode = "legacy" | "v2";
 export type LegacyCloudSavePurpose = "active" | "archive";
+export type CloudSavesVersion = "v1" | "v2";
 
 export interface CloudSaveSettingsVisibility {
   showV2: boolean;
@@ -23,8 +24,22 @@ export const isLegacyCloudSaveSettingsAvailable = (
   (settings.legacyPurpose === "active" ||
     (hasActiveSubscription && artifactCount > 0));
 
-export const getCloudSaveVisibility = (shop: GameShop): CloudSaveVisibility => {
+export const getCloudSaveVisibility = (
+  shop: GameShop,
+  cloudSavesVersion: CloudSavesVersion = "v2"
+): CloudSaveVisibility => {
   if (shop === "steam") {
+    if (cloudSavesVersion === "v1") {
+      return {
+        hero: "legacy",
+        settings: {
+          showV2: false,
+          showLegacy: true,
+          legacyPurpose: "active",
+        },
+      };
+    }
+
     return {
       hero: "v2",
       settings: {

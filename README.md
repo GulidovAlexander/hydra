@@ -36,6 +36,7 @@ This is a fork of [hydralauncher/hydra](https://github.com/hydralauncher/hydra) 
 - **Web dashboard** — manage your profile, banner, avatar, accent color, and custom CSS from a browser
 - **No subscription** — everything works without a Hydra Cloud subscription; all cloud save slots are unlimited
 - **Session control** — configure session duration and auto sign-out behavior
+- **Cloud Saves v1 / v2 switch** — pick between the legacy server backup flow (v1) and the new Hydra Cloud–style sync (v2) in Settings → Integrations → Cloud Saves
 
 ### SteamGridDB integration
 

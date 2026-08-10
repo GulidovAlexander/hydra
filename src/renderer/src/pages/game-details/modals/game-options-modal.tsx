@@ -190,15 +190,18 @@ export function GameOptionsModal({
     Boolean(userDetails),
     hasActiveSubscription
   );
-  const cloudSaveSettings = getCloudSaveVisibility(game.shop).settings;
+  const userPreferences = useAppSelector(
+    (state) => state.userPreferences.value
+  );
+  const cloudSaveSettings = getCloudSaveVisibility(
+    game.shop,
+    userPreferences?.cloudSavesVersion ?? "v2"
+  ).settings;
   const { showV2: showCloudSaveV2Settings, legacyPurpose } = cloudSaveSettings;
   const showLegacyCloudSaveSettings = isLegacyCloudSaveSettingsAvailable(
     cloudSaveSettings,
     hasActiveSubscription,
     artifacts.length
-  );
-  const userPreferences = useAppSelector(
-    (state) => state.userPreferences.value
   );
 
   const globalAutoRunGamemode = userPreferences?.autoRunGamemode === true;

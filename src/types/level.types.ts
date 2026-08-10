@@ -212,6 +212,7 @@ export interface UserPreferences {
   useSelfHostedProtondb?: boolean;
   signOutOnExit?: boolean;
   selfHostedSignOutOnExit?: boolean;
+  cloudSavesVersion?: "v1" | "v2";
   steamGridDbApiKey?: string | null;
   steamGridDbMode?: "hydra" | "custom";
 }

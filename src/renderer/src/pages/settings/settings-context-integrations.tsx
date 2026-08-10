@@ -3,6 +3,7 @@ import { SettingsDebrid } from "./settings-debrid";
 import { SettingsSelfHosted } from "./settings-self-hosted";
 import { SettingsSteamGridDb } from "./settings-steamgriddb";
 import { SettingsRetroAchievements } from "./settings-retroachievements";
+import { SettingsCloudSaves } from "./settings-cloud-saves";
 
 export function SettingsContextIntegrations() {
   const { t } = useTranslation("settings");
@@ -24,6 +25,8 @@ export function SettingsContextIntegrations() {
         <h3>{t("self_hosted_api")}</h3>
         <SettingsSelfHosted />
       </div>
+
+      <SettingsCloudSaves />
 
       <div className="settings-context-panel__group">
         <h3>SteamGridDB</h3>
