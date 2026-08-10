@@ -26,7 +26,8 @@ export const isLegacyCloudSaveSettingsAvailable = (
 
 export const getCloudSaveVisibility = (
   shop: GameShop,
-  cloudSavesVersion: CloudSavesVersion = "v2"
+  cloudSavesVersion: CloudSavesVersion = "v2",
+  selfHosted = false
 ): CloudSaveVisibility => {
   if (shop === "steam") {
     if (cloudSavesVersion === "v1") {
@@ -44,7 +45,7 @@ export const getCloudSaveVisibility = (
       hero: "v2",
       settings: {
         showV2: true,
-        showLegacy: true,
+        showLegacy: !selfHosted,
         legacyPurpose: "archive",
       },
     };

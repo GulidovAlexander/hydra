@@ -195,7 +195,8 @@ export function GameOptionsModal({
   );
   const cloudSaveSettings = getCloudSaveVisibility(
     game.shop,
-    userPreferences?.cloudSavesVersion ?? "v2"
+    userPreferences?.cloudSavesVersion ?? "v2",
+    Boolean(userPreferences?.selfHostedApiUrl)
   ).settings;
   const { showV2: showCloudSaveV2Settings, legacyPurpose } = cloudSaveSettings;
   const showLegacyCloudSaveSettings = isLegacyCloudSaveSettingsAvailable(

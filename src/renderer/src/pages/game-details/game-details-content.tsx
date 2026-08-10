@@ -92,8 +92,11 @@ export function GameDetailsContent() {
   const cloudSavesVersion =
     useAppSelector((state) => state.userPreferences.value)?.cloudSavesVersion ??
     "v2";
+  const selfHosted = Boolean(
+    useAppSelector((state) => state.userPreferences.value)?.selfHostedApiUrl
+  );
   const cloudSaveVisibility = game
-    ? getCloudSaveVisibility(game.shop, cloudSavesVersion)
+    ? getCloudSaveVisibility(game.shop, cloudSavesVersion, selfHosted)
     : null;
 
   const aboutTheGame = useMemo(() => {
