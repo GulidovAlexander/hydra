@@ -13,9 +13,10 @@ export const canAccessCloudSaves = (
 
 export const assertCloudSaveSubscription = (
   isLoggedIn = HydraApi.isLoggedIn(),
-  hasActiveSubscription = HydraApi.hasActiveSubscription()
+  hasActiveSubscription = HydraApi.hasActiveSubscription(),
+  isSelfHosted = HydraApi.isSelfHosted()
 ) => {
-  if (!isLoggedIn) {
+  if (!isLoggedIn && !isSelfHosted) {
     throw new UserNotLoggedInError();
   }
   if (!hasActiveSubscription) {
