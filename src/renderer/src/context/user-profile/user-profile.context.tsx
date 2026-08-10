@@ -1,6 +1,12 @@
 import { darkenColor, ensureArray } from "@renderer/helpers";
 import { useAppSelector, useToast } from "@renderer/hooks";
-import type { Badge, UserProfile, UserStats, UserGame } from "@types";
+import type {
+  Badge,
+  UserProfile,
+  UserStats,
+  UserStatsPercentile,
+  UserGame,
+} from "@types";
 import { average } from "color.js";
 
 import { createContext, useCallback, useEffect, useRef, useState } from "react";
@@ -136,7 +142,32 @@ export function UserProfileContextProvider({
           needsAuth: false,
         })
         .then((stats) => {
-          setUserStats(stats);
+          if (!stats) {
+            setUserStats(null);
+            return;
+          }
+
+          const alreadyPercentile = (v: unknown): v is UserStatsPercentile =>
+            typeof v === "object" &&
+            v !== null &&
+            typeof (v as UserStatsPercentile).value === "number";
+
+          const toPercentile = (v: unknown): UserStatsPercentile =>
+            alreadyPercentile(v)
+              ? (v as UserStatsPercentile)
+              : { value: Number(v ?? 0), topPercentile: 100 };
+
+          setUserStats({
+            libraryCount: stats.libraryCount ?? 0,
+            friendsCount: stats.friendsCount ?? 0,
+            totalPlayTimeInSeconds: toPercentile(
+              stats.totalPlayTimeInSeconds
+            ),
+            achievementsPointsEarnedSum: stats.achievementsPointsEarnedSum
+              ? toPercentile(stats.achievementsPointsEarnedSum)
+              : undefined,
+            unlockedAchievementSum: stats.unlockedAchievementSum,
+          });
         });
     },
     [userId]
