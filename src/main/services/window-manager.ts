@@ -1376,6 +1376,7 @@ export class WindowManager {
         const parsed = new URL(url);
         if (parsed.pathname === "/web/passkey-login") {
           e.preventDefault();
+          win.close();
           const server = http.createServer((req, res) => {
             const match = req.url?.match(/^\/token\/(.+)$/);
             if (match) {
@@ -1385,7 +1386,6 @@ export class WindowManager {
                 .catch(() => {});
               res.writeHead(200, { "Content-Type": "text/html" });
               res.end("<html><body style='background:#111;color:#ddd;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'><h1>Signed in!</h1></body></html>");
-              win.close();
               server.close();
             } else {
               res.writeHead(404);
