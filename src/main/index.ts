@@ -257,6 +257,7 @@ const handleDeepLinkPath = (uri?: string) => {
           .then((m) => m.selfHostedSignIn(null, token))
           .catch(() => {});
       }
+      WindowManager.closeAuthWindow();
       return;
     }
 
@@ -308,8 +309,10 @@ const handleDeepLinkPath = (uri?: string) => {
 };
 
 app.on("second-instance", (_event, commandLine) => {
-  const deepLink = commandLine.find((arg) =>
-    arg.startsWith("hydralauncher://") || arg.startsWith("hydra-self-hosted://")
+  const deepLink = commandLine.find(
+    (arg) =>
+      arg.startsWith("hydralauncher://") ||
+      arg.startsWith("hydra-self-hosted://")
   );
   const forceBigPicture = commandLine.includes("--big-picture");
 

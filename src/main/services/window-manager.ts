@@ -1361,13 +1361,25 @@ export class WindowManager {
     });
 
     // Intercept redirect to hydra-self-hosted://token/<accessToken>
-    const handleToken = (_e: any, url: string) => {
-      if (!url.startsWith("hydra-self-hosted://token/")) return;
-      const token = url.replace("hydra-self-hosted://token/", "");
-      import("@main/events/auth/self-hosted-sign-in")
-        .then((m) => m.selfHostedSignIn(null, token))
-        .catch(() => {});
-      win.close();
+    // and route passkey login to the system browser instead of this window
+    const handleToken = (e: Electron.Event, url: string) => {
+      if (url.startsWith("hydra-self-hosted://token/")) {
+        const token = url.replace("hydra-self-hosted://token/", "");
+        import("@main/events/auth/self-hosted-sign-in")
+          .then((m) => m.selfHostedSignIn(null, token))
+          .catch(() => {});
+        win.close();
+        return;
+      }
+      try {
+        const parsed = new URL(url);
+        if (parsed.pathname === "/web/passkey-login") {
+          e.preventDefault();
+          void shell.openExternal(url);
+        }
+      } catch {
+        // ignore malformed URLs
+      }
     };
     win.webContents.on("will-navigate", handleToken);
     win.webContents.on("will-redirect", handleToken);
