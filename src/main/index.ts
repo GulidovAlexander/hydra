@@ -89,8 +89,24 @@ if (process.platform === "linux") {
     const desktopDir = path.join(app.getPath("home"), ".local/share/applications");
     const desktopName = `${app.getName().toLowerCase()}.desktop`;
     const desktopPath = path.join(desktopDir, desktopName);
-    if (existsSync(desktopPath)) {
-      let content = readFileSync(desktopPath, "utf-8");
+    // Also check for Electron-generated files with hash suffix
+    const candidates = [desktopPath];
+    try {
+      for (const f of require("node:fs").readdirSync(desktopDir)) {
+        if (
+          f.endsWith(".desktop") &&
+          f !== desktopName &&
+          f.startsWith(app.getName().toLowerCase())
+        ) {
+          candidates.push(path.join(desktopDir, f));
+        }
+      }
+    } catch {
+      // non-fatal
+    }
+    for (const dp of candidates) {
+      if (!existsSync(dp)) continue;
+      let content = readFileSync(dp, "utf-8");
       let changed = false;
       const mimeMatch = content.match(/^MimeType=.*$/m);
       if (mimeMatch && !mimeMatch[0].includes(SELF_HOSTED_PROTOCOL)) {
@@ -105,14 +121,14 @@ if (process.platform === "linux") {
         changed = true;
       }
       if (changed) {
-        writeFileSync(desktopPath, content);
-        const { execSync } = require("child_process");
-        execSync(
-          `xdg-mime default ${desktopName} x-scheme-handler/${SELF_HOSTED_PROTOCOL}`,
-          { stdio: "ignore" }
-        );
+        writeFileSync(dp, content);
       }
     }
+    const { execSync } = require("child_process");
+    execSync(
+      `xdg-mime default ${desktopName} x-scheme-handler/${SELF_HOSTED_PROTOCOL}`,
+      { stdio: "ignore" }
+    );
   } catch {
     // non-fatal
   }
