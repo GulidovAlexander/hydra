@@ -1075,6 +1075,48 @@ declare global {
     importFromHydraCloud: (officialToken: string) => Promise<void>;
     onOfficialSignIn: (cb: () => void) => () => void;
 
+    /* Admin */
+    getAdminUsers: (
+      skip?: number,
+      take?: number
+    ) => Promise<{
+      users: Array<{
+        id: string;
+        username: string;
+        role: string;
+        createdAt: string;
+        updatedAt: string;
+      }>;
+      total: number;
+    }>;
+    createAdminUser: (data: {
+      username: string;
+      password: string;
+      role?: string;
+    }) => Promise<{
+      id: string;
+      username: string;
+      role: string;
+      createdAt: string;
+    }>;
+    updateAdminUser: (
+      id: string,
+      data: { username?: string; password?: string; role?: string }
+    ) => Promise<{
+      id: string;
+      username: string;
+      role: string;
+      createdAt: string;
+      updatedAt: string;
+    }>;
+    deleteAdminUser: (id: string) => Promise<{ ok: boolean }>;
+    getAdminStats: () => Promise<{
+      totalUsers: number;
+      totalGames: number;
+      totalSaves: number;
+      totalArtifacts: number;
+    }>;
+
     /* Installer */
     onInstallerFound: (
       cb: (info: {
@@ -1099,6 +1141,11 @@ declare global {
       shop: GameShop,
       objectId: string,
       value: boolean
+    ) => Promise<void>;
+    updateGameCloudSavesVersion: (
+      shop: GameShop,
+      objectId: string,
+      cloudSavesVersion: "v1" | "v2" | null
     ) => Promise<void>;
 
     /* Fork updater */

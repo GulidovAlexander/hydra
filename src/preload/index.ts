@@ -857,6 +857,17 @@ contextBridge.exposeInMainWorld("electron", {
       objectId,
       launchViaSteam
     ),
+  updateGameCloudSavesVersion: (
+    shop: GameShop,
+    objectId: string,
+    cloudSavesVersion: "v1" | "v2" | null
+  ) =>
+    ipcRenderer.invoke(
+      "updateGameCloudSavesVersion",
+      shop,
+      objectId,
+      cloudSavesVersion
+    ),
   checkGameOnSteam: (shop: GameShop, objectId: string) =>
     ipcRenderer.invoke("checkGameOnSteam", shop, objectId) as Promise<boolean>,
   isGamemodeAvailable: () => ipcRenderer.invoke("isGamemodeAvailable"),
@@ -1572,6 +1583,21 @@ contextBridge.exposeInMainWorld("electron", {
     ipcRenderer.on("on-signout", listener);
     return () => ipcRenderer.removeListener("on-signout", listener);
   },
+
+  /* Admin */
+  getAdminUsers: (skip?: number, take?: number) =>
+    ipcRenderer.invoke("getAdminUsers", skip, take),
+  createAdminUser: (data: {
+    username: string;
+    password: string;
+    role?: string;
+  }) => ipcRenderer.invoke("createAdminUser", data),
+  updateAdminUser: (
+    id: string,
+    data: { username?: string; password?: string; role?: string }
+  ) => ipcRenderer.invoke("updateAdminUser", id, data),
+  deleteAdminUser: (id: string) => ipcRenderer.invoke("deleteAdminUser", id),
+  getAdminStats: () => ipcRenderer.invoke("getAdminStats"),
 
   /* Notifications */
   publishNewRepacksNotification: (newRepacksCount: number) =>
