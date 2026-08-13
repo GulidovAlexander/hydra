@@ -47,3 +47,30 @@
   text-decoration: underline;
   align-self: center;
 }
+
+.self-hosted-auth__divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #666;
+  font-size: 12px;
+
+  &::before,
+  &::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: #333;
+  }
+}
+
+.self-hosted-auth__passkey-btn {
+  background: transparent !important;
+  border: 1px solid #444 !important;
+  color: #ccc !important;
+
+  &:hover {
+    border-color: #d4a574 !important;
+    color: #d4a574 !important;
+  }
+}

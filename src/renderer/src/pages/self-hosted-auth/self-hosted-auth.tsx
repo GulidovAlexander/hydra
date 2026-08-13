@@ -42,6 +42,17 @@ export default function SelfHostedAuth() {
     }
   };
 
+  const handlePasskeyLogin = async () => {
+    try {
+      const prefs = await window.electron.getUserPreferences();
+      const baseUrl = prefs?.selfHostedApiUrl;
+      if (!baseUrl) throw new Error("No self-hosted URL configured");
+      window.electron.openExternal(`${baseUrl}/web/passkey-login`);
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
   return (
     <div className="self-hosted-auth">
       <div className="self-hosted-auth__title-bar">
@@ -76,6 +87,19 @@ export default function SelfHostedAuth() {
           disabled={loading || !form.username || !form.password}
         >
           {loading ? "..." : mode === "login" ? "Sign in" : "Register"}
+        </Button>
+
+        <div className="self-hosted-auth__divider">
+          <span>or</span>
+        </div>
+
+        <Button
+          type="button"
+          className="self-hosted-auth__passkey-btn"
+          onClick={handlePasskeyLogin}
+          disabled={loading}
+        >
+          Sign in with Passkey
         </Button>
 
         <button

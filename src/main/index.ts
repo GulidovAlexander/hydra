@@ -51,6 +51,7 @@ i18n.init({
 });
 
 const PROTOCOL = "hydralauncher";
+const SELF_HOSTED_PROTOCOL = "hydra-self-hosted";
 
 // Register the custom schemes as privileged so the renderer can fetch them
 // (supportFetchAPI) and use the results on a canvas without tainting it
@@ -71,9 +72,13 @@ if (process.defaultApp) {
     app.setAsDefaultProtocolClient(PROTOCOL, process.execPath, [
       path.resolve(process.argv[1]),
     ]);
+    app.setAsDefaultProtocolClient(SELF_HOSTED_PROTOCOL, process.execPath, [
+      path.resolve(process.argv[1]),
+    ]);
   }
 } else {
   app.setAsDefaultProtocolClient(PROTOCOL);
+  app.setAsDefaultProtocolClient(SELF_HOSTED_PROTOCOL);
 }
 
 const initializeApp = async () => {
@@ -244,6 +249,17 @@ const handleDeepLinkPath = (uri?: string) => {
   if (!uri) return;
 
   try {
+    // Handle hydra-self-hosted://token/<accessToken> from passkey browser login
+    if (uri.startsWith("hydra-self-hosted://token/")) {
+      const token = uri.replace("hydra-self-hosted://token/", "");
+      if (token) {
+        import("@main/events/auth/self-hosted-sign-in")
+          .then((m) => m.selfHostedSignIn(null, token))
+          .catch(() => {});
+      }
+      return;
+    }
+
     const url = new URL(uri);
 
     if (url.host === "run") {
@@ -293,12 +309,19 @@ const handleDeepLinkPath = (uri?: string) => {
 
 app.on("second-instance", (_event, commandLine) => {
   const deepLink = commandLine.find((arg) =>
-    arg.startsWith("hydralauncher://")
+    arg.startsWith("hydralauncher://") || arg.startsWith("hydra-self-hosted://")
   );
   const forceBigPicture = commandLine.includes("--big-picture");
 
   // Check if this is a "run" deep link - don't show main window in that case
   const isRunDeepLink = deepLink?.startsWith("hydralauncher://run");
+  // Passkey token deep link - handle silently
+  const isPasskeyLink = deepLink?.startsWith("hydra-self-hosted://token/");
+
+  if (isPasskeyLink) {
+    handleDeepLinkPath(deepLink);
+    return;
+  }
 
   if (!isRunDeepLink) {
     if (WindowManager.mainWindow) {
