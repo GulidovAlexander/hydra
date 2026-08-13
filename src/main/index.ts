@@ -3,6 +3,7 @@ import updater from "electron-updater";
 import i18n from "i18next";
 import path from "node:path";
 import url from "node:url";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { electronApp, optimizer } from "@electron-toolkit/utils";
 import {
   logger,
@@ -79,6 +80,42 @@ if (process.defaultApp) {
 } else {
   app.setAsDefaultProtocolClient(PROTOCOL);
   app.setAsDefaultProtocolClient(SELF_HOSTED_PROTOCOL);
+}
+
+// Linux: ensure both protocols are in the desktop file (Electron's second call
+// often overwrites the first's MimeType on Linux)
+if (process.platform === "linux") {
+  try {
+    const desktopDir = path.join(app.getPath("home"), ".local/share/applications");
+    const desktopName = `${app.getName().toLowerCase()}.desktop`;
+    const desktopPath = path.join(desktopDir, desktopName);
+    if (existsSync(desktopPath)) {
+      let content = readFileSync(desktopPath, "utf-8");
+      let changed = false;
+      const mimeMatch = content.match(/^MimeType=.*$/m);
+      if (mimeMatch && !mimeMatch[0].includes(SELF_HOSTED_PROTOCOL)) {
+        content = content.replace(
+          /^(MimeType=.*?)(;?)$/m,
+          `$1;x-scheme-handler/${SELF_HOSTED_PROTOCOL};`
+        );
+        changed = true;
+      }
+      if (!/^Exec=.*%u/m.test(content)) {
+        content = content.replace(/^(Exec=\S+)/m, "$1 %u");
+        changed = true;
+      }
+      if (changed) {
+        writeFileSync(desktopPath, content);
+        const { execSync } = require("child_process");
+        execSync(
+          `xdg-mime default ${desktopName} x-scheme-handler/${SELF_HOSTED_PROTOCOL}`,
+          { stdio: "ignore" }
+        );
+      }
+    }
+  } catch {
+    // non-fatal
+  }
 }
 
 const initializeApp = async () => {
