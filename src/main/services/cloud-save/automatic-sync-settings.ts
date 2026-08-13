@@ -53,12 +53,15 @@ const readCloudSaveAutomaticSyncMode = async (
   shop: GameShop
 ) => {
   const key = getAutomaticSyncKey(shop, objectId);
-  const [storedV2Enabled, game, preferredVersion] = await Promise.all([
+  const [storedV2Enabled, game] = await Promise.all([
     cloudSaveAutomaticSyncSettingsSublevel.get(key),
     gamesSublevel.get(key),
-    getPreferredCloudSaveVersion(),
   ]);
   const legacyEnabled = game?.automaticCloudSync === true;
+  const preferredVersion =
+    game?.cloudSavesVersion === "v1" || game?.cloudSavesVersion === "v2"
+      ? game.cloudSavesVersion
+      : await getPreferredCloudSaveVersion();
   const mode =
     preferredVersion === "v1"
       ? resolveCloudSaveAutomaticSyncMode({
