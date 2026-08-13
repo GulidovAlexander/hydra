@@ -27,6 +27,7 @@ import {
 import { t } from "i18next";
 import { orderBy } from "lodash-es";
 import path from "node:path";
+import http from "node:http";
 import UserAgent from "user-agents";
 import { HydraApi } from "./hydra-api";
 import { logger } from "./logger";
@@ -1361,7 +1362,7 @@ export class WindowManager {
     });
 
     // Intercept redirect to hydra-self-hosted://token/<accessToken>
-    // and route passkey login to the system browser instead of this window
+    // and route passkey login to the system browser via localhost callback
     const handleToken = (e: Electron.Event, url: string) => {
       if (url.startsWith("hydra-self-hosted://token/")) {
         const token = url.replace("hydra-self-hosted://token/", "");
@@ -1375,7 +1376,29 @@ export class WindowManager {
         const parsed = new URL(url);
         if (parsed.pathname === "/web/passkey-login") {
           e.preventDefault();
-          void shell.openExternal(url);
+          const server = http.createServer((req, res) => {
+            const match = req.url?.match(/^\/token\/(.+)$/);
+            if (match) {
+              const token = decodeURIComponent(match[1]);
+              import("@main/events/auth/self-hosted-sign-in")
+                .then((m) => m.selfHostedSignIn(null, token))
+                .catch(() => {});
+              res.writeHead(200, { "Content-Type": "text/html" });
+              res.end("<html><body style='background:#111;color:#ddd;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'><h1>Signed in!</h1></body></html>");
+              win.close();
+              server.close();
+            } else {
+              res.writeHead(404);
+              res.end("Not found");
+            }
+          });
+          server.listen(0, "127.0.0.1", () => {
+            const addr = server.address();
+            const port = typeof addr === "object" && addr ? addr.port : 0;
+            parsed.searchParams.set("callback_port", String(port));
+            void shell.openExternal(parsed.toString());
+          });
+          return;
         }
       } catch {
         // ignore malformed URLs
