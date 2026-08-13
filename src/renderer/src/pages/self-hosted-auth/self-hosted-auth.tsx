@@ -47,7 +47,7 @@ export default function SelfHostedAuth() {
       const prefs = await window.electron.getUserPreferences();
       const baseUrl = prefs?.selfHostedApiUrl;
       if (!baseUrl) throw new Error("No self-hosted URL configured");
-      window.electron.openExternal(`${baseUrl}/web/passkey-login`);
+      window.electron.openExternal(`${baseUrl}/web/passkey-login?launcher=1`);
     } catch (err: any) {
       setError(err.message);
     }
