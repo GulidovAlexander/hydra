@@ -89,19 +89,6 @@ export default function SelfHostedAuth() {
           {loading ? "..." : mode === "login" ? "Sign in" : "Register"}
         </Button>
 
-        <div className="self-hosted-auth__divider">
-          <span>or</span>
-        </div>
-
-        <Button
-          type="button"
-          className="self-hosted-auth__passkey-btn"
-          onClick={handlePasskeyLogin}
-          disabled={loading}
-        >
-          Sign in with Passkey
-        </Button>
-
         <button
           type="button"
           className="self-hosted-auth__switch"
@@ -115,6 +102,19 @@ export default function SelfHostedAuth() {
             : "Already have an account? Sign in"}
         </button>
       </form>
+
+      <div className="self-hosted-auth__divider">
+        <span>or</span>
+      </div>
+
+      <Button
+        type="button"
+        className="self-hosted-auth__passkey-btn"
+        onClick={handlePasskeyLogin}
+        disabled={loading}
+      >
+        Sign in with Passkey
+      </Button>
     </div>
   );
 }
