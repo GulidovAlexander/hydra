@@ -9,9 +9,17 @@ on:
     branches:
       - release/**
 
+# The default GITHUB_TOKEN is read-only, which makes the Release step fail with
+# "403 Resource not accessible by integration". Grant write access so it can
+# create the GitHub release.
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
+      # Don't let one OS failing cancel the other — we want both artifacts.
+      fail-fast: false
       matrix:
         os: [windows-2022, ubuntu-latest]
 
@@ -20,6 +28,11 @@ jobs:
     steps:
       - name: Check out Git repository
         uses: actions/checkout@v4
+
+      - name: Read app version
+        id: appversion
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
 
       - name: Install Node.js
         uses: actions/setup-node@v4
@@ -112,6 +125,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           draft: true
+          tag_name: v${{ steps.appversion.outputs.version }}
+          name: v${{ steps.appversion.outputs.version }}
           files: |
             dist/*.exe
             dist/*.zip
