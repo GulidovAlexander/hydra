@@ -27,7 +27,7 @@ const { autoUpdater } = updater;
 
 autoUpdater.setFeedURL({
   provider: "github",
-  owner: "hydralauncher",
+  owner: "GulidovAlexander",
   repo: "hydra",
 });
 
@@ -86,7 +86,10 @@ if (process.defaultApp) {
 // often overwrites the first's MimeType on Linux)
 if (process.platform === "linux") {
   try {
-    const desktopDir = path.join(app.getPath("home"), ".local/share/applications");
+    const desktopDir = path.join(
+      app.getPath("home"),
+      ".local/share/applications"
+    );
     const desktopName = `${app.getName().toLowerCase()}.desktop`;
     const desktopPath = path.join(desktopDir, desktopName);
     // Also check for Electron-generated files with hash suffix
