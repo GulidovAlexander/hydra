@@ -304,8 +304,8 @@ export function SidebarNotificationsDropdown({
         ),
       ]);
 
-      setApiNotifications(notificationsResponse.notifications);
-      setApiUnreadCount(countResponse.count);
+      setApiNotifications(notificationsResponse?.notifications ?? []);
+      setApiUnreadCount(countResponse?.count ?? 0);
     } catch {
       setApiNotifications([]);
       setApiUnreadCount(0);
@@ -361,7 +361,7 @@ export function SidebarNotificationsDropdown({
   }, [fetchApiNotifications, refreshNotifications]);
 
   const mergedNotifications = useMemo<MergedNotification[]>(() => {
-    const apiWithSource = apiNotifications.map((notification) => ({
+    const apiWithSource = (apiNotifications ?? []).map((notification) => ({
       ...notification,
       isRead: apiUnreadOverrides.has(notification.id)
         ? false

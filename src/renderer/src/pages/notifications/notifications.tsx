@@ -96,15 +96,17 @@ export default function Notifications() {
         logger.log("Notifications API response:", response);
 
         if (append) {
-          setApiNotifications((prev) => [...prev, ...response.notifications]);
+          setApiNotifications((prev) => [...prev, ...(response.notifications ?? [])]);
         } else {
-          setApiNotifications(response.notifications);
+          setApiNotifications(response.notifications ?? []);
         }
 
         setPagination({
-          total: response.pagination.total,
-          hasMore: response.pagination.hasMore,
-          skip: response.pagination.skip + response.pagination.take,
+          total: response.pagination?.total ?? 0,
+          hasMore: response.pagination?.hasMore ?? false,
+          skip:
+            (response.pagination?.skip ?? 0) +
+            (response.pagination?.take ?? 0),
         });
       } catch (error) {
         logger.error("Failed to fetch API notifications", error);
