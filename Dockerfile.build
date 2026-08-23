@@ -1,0 +1,46 @@
+# syntax=docker/dockerfile:1.7
+# ===========================================================================
+# Hydra launcher — REPRODUCIBLE BUILD environment (not a runtime server).
+#
+# Hydra is a desktop Electron app; it does not "run" in a container the way a
+# web service does. What this image does is build the Linux installers
+# (AppImage / deb / rpm) exactly the way the project's CI does — Node 22 +
+# Rust (native addon) + Python 3 (libtorrent RPC via cx_Freeze) — so you never
+# have to install that whole toolchain on your host.
+#
+# Driven by docker-compose.yml:  `docker compose run --rm build`
+# Artifacts land in ./dist on the host.
+# ===========================================================================
+
+FROM node:22-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+# --- toolchain for the Rust addon's C deps + rustup fetch ------------------
+      build-essential pkg-config curl ca-certificates git \
+# --- Python RPC (python_rpc, cx_Freeze + libtorrent) -----------------------
+      python3 python3-pip python3-venv python3-libtorrent \
+# --- electron-builder targets: fakeroot/dpkg (deb), rpm, and runtime libs ---
+      fakeroot dpkg dpkg-dev rpm \
+      libgtk-3-0 libnss3 libasound2 \
+ && rm -rf /var/lib/apt/lists/*
+
+# Debian's apt cargo is too old for this repo's Cargo.lock (lockfile v4), so
+# install current stable Rust the same way the project's CI does (rustup).
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+      | sh -s -- -y --default-toolchain stable --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Corepack ships with Node 22; pin Yarn Classic to match the repo.
+RUN corepack enable
+
+WORKDIR /app
+
+# The build reads Rust/Python from PATH; python3-libtorrent is already on the
+# system site-packages so requirements.txt's libtorrent resolves to it.
+# Non-login `sh -c` so the ENV PATH (with rustup's /root/.cargo/bin) is kept —
+# a login shell would reset PATH from /etc/profile and hide the modern cargo.
+CMD ["sh", "-c", "\
+  cargo --version && \
+  yarn install --frozen-lockfile && \
+  yarn build:linux \
+"]

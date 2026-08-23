@@ -1,0 +1,39 @@
+name: hydra-launcher-build
+
+# ---------------------------------------------------------------------------
+# Hydra is a DESKTOP app, so there is nothing to "serve". This compose gives
+# you a throwaway box that builds the Linux installers into ./dist:
+#
+#     docker compose run --rm build          # AppImage + deb + rpm -> ./dist
+#
+# Then install the artifact on each of your machines the normal way, e.g.
+#     chmod +x dist/hydralauncher-*.AppImage && ./dist/hydralauncher-*.AppImage
+#
+# Note: on this host the default Docker bridge has no outbound DNS, so the
+# build uses the host network (matches the API project). Drop `network_mode`
+# once plain `docker run alpine ping 1.1.1.1` works for you.
+# ---------------------------------------------------------------------------
+
+services:
+  build:
+    build:
+      context: .
+      dockerfile: Dockerfile.build
+      network: host
+    image: hydra-launcher-build:local
+    network_mode: host
+    environment:
+      # electron-builder can skip re-downloading electron if you cache it:
+      - ELECTRON_CACHE=/app/.cache/electron
+      - ELECTRON_BUILDER_CACHE=/app/.cache/electron-builder
+    volumes:
+      # Source in, artifacts out. node_modules/target/build stay in anonymous
+      # volumes so host and container toolchains never fight over binaries.
+      - .:/app
+      - /app/node_modules
+      - /app/native/hydra-native/target
+      - /app/build
+      - launcher-cache:/app/.cache
+
+volumes:
+  launcher-cache:

@@ -1,0 +1,11 @@
+.git
+node_modules
+dist
+out
+.vite
+*.tsbuildinfo
+native/hydra-native/target
+hydra-python-rpc
+.env
+.env.*
+резюме

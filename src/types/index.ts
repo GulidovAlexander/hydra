@@ -8,6 +8,7 @@ import type {
 } from "./level.types";
 import type { GameShop, UnlockedAchievement } from "./game.types";
 import type { ArtworkAssetType } from "./artwork.types";
+import type { GameContentWarning } from "./souvenir.types";
 
 export type FriendRequestAction = "ACCEPTED" | "REFUSED" | "CANCEL";
 export * from "./download-contract";
@@ -238,6 +239,8 @@ export type UserProfileCurrentGame = GameRunning &
   };
 
 export type ProfileVisibility = "PUBLIC" | "PRIVATE" | "FRIENDS";
+export type SouvenirSort = "recent" | "oldest" | "rare";
+export type SouvenirsHiddenReason = "FRIENDS_ONLY" | "PRIVATE" | null;
 
 export interface Badge {
   name: string;
@@ -256,6 +259,7 @@ export interface UserDetails {
   profileImageUrl: string | null;
   backgroundImageUrl: string | null;
   profileVisibility: ProfileVisibility;
+  souvenirsVisibility: ProfileVisibility;
   bio: string;
   workwondersJwt: string;
   subscription: Subscription | null;
@@ -265,6 +269,65 @@ export interface UserDetails {
   };
 }
 
+export interface ProfileAchievement {
+  name: string;
+  displayName: string;
+  description: string;
+  imageUrl: string | null;
+  achievementIcon: string | null;
+  unlockTime: number;
+  points: number | null;
+  isRare: boolean | null;
+  isPlatinum: boolean;
+  gameUnlockedAchievementCount: number;
+  gameTotalAchievementCount: number;
+  visibility?: ProfileVisibility;
+  gameId: string;
+  objectId: string;
+  shop: GameShop;
+  gameTitle: string | null;
+  gameIconUrl: string | null;
+  gameContentWarning?: GameContentWarning;
+  gameContentDescriptorIds?: number[] | null;
+  likeCount: number;
+  likedByMe: boolean;
+}
+
+export interface ProfileSouvenirAchievement {
+  name: string;
+  displayName: string;
+  description: string;
+  achievementIcon: string | null;
+  unlockTime: number;
+  points: number | null;
+  isRare: boolean | null;
+  isPlatinum: boolean;
+}
+
+export interface ProfileSouvenir {
+  id: string;
+  imageUrl: string | null;
+  capturedAt: number;
+  primaryAchievementName: string;
+  achievements: ProfileSouvenirAchievement[];
+  visibility?: ProfileVisibility;
+  gameId: string;
+  objectId: string;
+  shop: GameShop;
+  gameTitle: string | null;
+  gameIconUrl: string | null;
+  gameContentWarning?: GameContentWarning;
+  gameContentDescriptorIds?: number[] | null;
+  likeCount: number;
+  likedByMe: boolean;
+}
+
+export interface SouvenirsResponse {
+  items: Array<ProfileSouvenir | ProfileAchievement>;
+  total: number;
+  hiddenReason: SouvenirsHiddenReason;
+}
+
 export interface UserProfile {
   id: string;
   displayName: string;
@@ -272,6 +335,7 @@ export interface UserProfile {
   email: string | null;
   backgroundImageUrl: string | null;
   profileVisibility: ProfileVisibility;
+  souvenirsVisibility: ProfileVisibility;
   libraryGames: UserGame[];
   recentGames: UserGame[];
   friends: UserFriend[];
@@ -292,6 +356,7 @@ export interface UserProfile {
 export interface UpdateProfileRequest {
   displayName?: string;
   profileVisibility?: ProfileVisibility;
+  souvenirsVisibility?: ProfileVisibility;
   profileImageUrl?: string | null;
   backgroundImageUrl?: string | null;
   bio?: string;
@@ -380,6 +445,10 @@ export interface UpdatedUnlockedAchievements {
   objectId: string;
   shop: GameShop;
   achievements: UnlockedAchievement[];
+  souvenirs?: Array<{
+    clientId: string;
+    id: string;
+  }>;
 }
 
 export interface AchievementFile {
@@ -390,6 +459,26 @@ export interface AchievementFile {
 export type GameAchievementFiles = {
   [id: string]: AchievementFile[];
 };
+
+export interface AchievementMetadataEntry {
+  description: string;
+  displayName: string;
+  hidden: 0 | 1;
+  icon: string;
+  icongray: string;
+  name: string;
+}
+
+export type GameLauncherStatus =
+  | "generating_achievements"
+  | "downloading_achievement_icons"
+  | "complete";
+
+export interface GameLauncherStatusPayload {
+  gameKey: string;
+  status: GameLauncherStatus;
+  detail: string | null;
+}
 
 export interface AchievementNotificationInfo {
   title: string;
@@ -430,7 +519,18 @@ export interface GameArtifact {
 
 export type LegacySaveExportResult =
   | { status: "saved"; filePath: string }
-  | { status: "cancelled" };
+  | { status: "cancelled" }
+  | { status: "busy" };
+
+export interface LegacySaveExportProgress {
+  downloadedBytes: number;
+  totalBytes: number | null;
+  percentage: number | null;
+}
+
+export interface LegacySaveExportIpcProgress extends LegacySaveExportProgress {
+  operationId: string;
+}
 
 export type NotificationType =
   | "FRIEND_REQUEST_RECEIVED"
@@ -439,6 +539,7 @@ export type NotificationType =
   | "REVIEW_UPVOTE"
   | "REVIEW_ANSWER"
   | "REVIEW_ANSWER_UPVOTE"
+  | "SOUVENIR_LIKE"
   | "RETROACHIEVEMENTS_CREDENTIALS_RESTORED"
   | "RETROACHIEVEMENTS_CREDENTIALS_INVALID"
   | "RETROACHIEVEMENTS_SYNC_FAILED";
@@ -618,3 +719,4 @@ export * from "./emulator.types";
 export * from "./retroarch.types";
 export * from "./artwork.types";
 export * from "./cloud-save.types";
+export * from "./souvenir.types";

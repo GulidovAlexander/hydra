@@ -19,9 +19,11 @@ import { settingsContext } from "@renderer/context";
 import { AuthPage } from "@shared";
 import { useAppSelector } from "@renderer/hooks";
 import "./settings-account.scss";
+import type { ProfileVisibility } from "@types";
 
 interface FormValues {
-  profileVisibility: "PUBLIC" | "FRIENDS" | "PRIVATE";
+  profileVisibility: ProfileVisibility;
+  souvenirsVisibility: ProfileVisibility;
 }
 
 export function SettingsAccount() {
@@ -41,7 +43,12 @@ export function SettingsAccount() {
     formState: { isSubmitting },
     setValue,
     handleSubmit,
-  } = useForm<FormValues>();
+  } = useForm<FormValues>({
+    defaultValues: {
+      profileVisibility: "PUBLIC",
+      souvenirsVisibility: "PRIVATE",
+    },
+  });
 
   const {
     userDetails,
@@ -61,6 +68,9 @@ export function SettingsAccount() {
   useEffect(() => {
     if (userDetails?.profileVisibility) {
       setValue("profileVisibility", userDetails.profileVisibility);
+    }
+    if (userDetails?.souvenirsVisibility) {
+      setValue("souvenirsVisibility", userDetails.souvenirsVisibility);
     }
   }, [userDetails, setValue]);
 
@@ -184,6 +194,37 @@ export function SettingsAccount() {
               />
 
               <small>{t("profile_visibility_description")}</small>
+            </section>
+          );
+        }}
+      />
+
+      <Controller
+        control={control}
+        name="souvenirsVisibility"
+        render={({ field }) => {
+          const handleChange = (
+            event: React.ChangeEvent<HTMLSelectElement>
+          ) => {
+            field.onChange(event);
+            handleSubmit(onSubmit)();
+          };
+
+          return (
+            <section className="settings-account__section">
+              <SelectField
+                label={t("souvenirs_visibility")}
+                value={field.value}
+                onChange={handleChange}
+                options={visibilityOptions.map((visibility) => ({
+                  key: visibility.value,
+                  value: visibility.value,
+                  label: visibility.label,
+                }))}
+                disabled={isSubmitting}
+              />
+
+              <small>{t("souvenirs_visibility_description")}</small>
             </section>
           );
         }}
