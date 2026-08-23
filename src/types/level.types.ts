@@ -83,6 +83,7 @@ export interface Game {
   dontAskDiscSelection?: boolean;
   romSizeBytes?: number | null;
   launchViaSteam?: boolean | null;
+  cloudSavesVersion?: "v1" | "v2" | null;
 }
 
 export interface Download {
