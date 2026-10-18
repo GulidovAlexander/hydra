@@ -1,9 +1,14 @@
 import type { ChildProcess } from "node:child_process";
 
 import { gamesSublevel, levelKeys } from "@main/level";
+import { EMULATOR_SYSTEMS } from "@shared";
 import type { EmulatorSystem, Game, GameShop, RetroArchPlatform } from "@types";
 
 import { trackGamePlaytime } from "../library-sync";
+import {
+  deleteEmulatorGameRunning,
+  setEmulatorGameRunning,
+} from "../game-running-state";
 import { logger } from "../logger";
 import { syncRetroAchievements } from "../retro-achievements/retro-achievements-sync";
 import {
@@ -11,11 +16,15 @@ import {
   stopEmulatorSouvenirWatcher,
 } from "./emulator-souvenir-watcher";
 import { WindowManager } from "../window-manager";
+import {
+  hasCloudSaveLaunchGuard,
+  runAutomaticCloudSavePostExit,
+} from "../cloud-save";
 import { readEmulatorPlaytimeSeconds } from "./playtime-files";
 import { stopLinuxGameCaptureSession } from "../linux-game-capture-session";
 import {
-  cleanupRetroArchSouvenirSession,
-  type RetroArchSouvenirSession,
+  cleanupEmulatorSouvenirSession,
+  type EmulatorSouvenirSession,
 } from "./emulator-souvenir-config";
 
 export type EmulatorSessionSystem = EmulatorSystem | RetroArchPlatform;
@@ -23,7 +32,7 @@ export type EmulatorSessionSystem = EmulatorSystem | RetroArchPlatform;
 const isEmulatorSystem = (
   system: EmulatorSessionSystem
 ): system is EmulatorSystem =>
-  system === "ps1" || system === "ps2" || system === "ps3";
+  EMULATOR_SYSTEMS.includes(system as EmulatorSystem);
 
 export interface EmulatorSession {
   shop: GameShop;
@@ -35,7 +44,7 @@ export interface EmulatorSession {
   startedAt: number;
   heartbeat: ReturnType<typeof setInterval> | null;
   child: ChildProcess;
-  souvenirSession: RetroArchSouvenirSession | null;
+  souvenirSession: EmulatorSouvenirSession | null;
 }
 
 export const emulatorSessions = new Map<string, EmulatorSession>();
@@ -57,7 +66,7 @@ interface StartEmulatorSessionOptions {
   executablePath: string;
   sku: string | null;
   child: ChildProcess;
-  souvenirSession?: RetroArchSouvenirSession | null;
+  souvenirSession?: EmulatorSouvenirSession | null;
 }
 
 export const startEmulatorSession = async ({
@@ -89,6 +98,7 @@ export const startEmulatorSession = async ({
   };
 
   emulatorSessions.set(gameKey, session);
+  setEmulatorGameRunning(gameKey);
 
   if (game.shop !== "custom") {
     void sendPresencePing(gameKey);
@@ -108,8 +118,12 @@ export const startEmulatorSession = async ({
       executablePath,
       processId: child.pid ?? 0,
       watcherToken: souvenirWatcherToken,
+      logPath: souvenirSession?.logPath ?? undefined,
+      logOffset: souvenirSession?.logOffset ?? undefined,
       screenshotDirectories: souvenirSession
-        ? [souvenirSession.screenshotDirectory]
+        ? [souvenirSession.screenshotDirectory].filter(
+            (directory): directory is string => !!directory
+          )
         : undefined,
     })
       .then(() => {
@@ -162,7 +176,7 @@ export const closeEmulatorSession = (gameKey: string): boolean => {
 export const stopAllEmulatorSouvenirCaptureSessions = async () => {
   for (const [gameKey, session] of emulatorSessions) {
     stopEmulatorSouvenirWatcher(gameKey);
-    await cleanupRetroArchSouvenirSession(session.souvenirSession);
+    await cleanupEmulatorSouvenirSession(session.souvenirSession);
     session.souvenirSession = null;
   }
 };
@@ -171,10 +185,11 @@ const finalizeEmulatorSession = async (gameKey: string): Promise<void> => {
   const session = emulatorSessions.get(gameKey);
   if (!session) return;
   emulatorSessions.delete(gameKey);
+  deleteEmulatorGameRunning(gameKey);
   stopLinuxGameCaptureSession(gameKey);
   if (session.heartbeat) clearInterval(session.heartbeat);
   stopEmulatorSouvenirWatcher(gameKey);
-  await cleanupRetroArchSouvenirSession(session.souvenirSession);
+  await cleanupEmulatorSouvenirSession(session.souvenirSession);
 
   const game = await gamesSublevel.get(gameKey);
   if (!game) return;
@@ -228,6 +243,13 @@ const finalizeEmulatorSession = async (gameKey: string): Promise<void> => {
     });
 
   if (game.shop === "launchbox") {
+    if (hasCloudSaveLaunchGuard(game.objectId, game.shop)) {
+      void runAutomaticCloudSavePostExit(game.objectId, game.shop).catch(
+        (error) => {
+          logger.error("Failed to sync emulator save after exit", error);
+        }
+      );
+    }
     syncRetroAchievements({
       objectId: game.objectId,
       shop: game.shop,

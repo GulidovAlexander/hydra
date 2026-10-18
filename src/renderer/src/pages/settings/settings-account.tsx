@@ -23,6 +23,7 @@ import type { ProfileVisibility } from "@types";
 
 interface FormValues {
   profileVisibility: ProfileVisibility;
+  allowCloudGifts: boolean;
   souvenirsVisibility: ProfileVisibility;
 }
 
@@ -68,6 +69,7 @@ export function SettingsAccount() {
   useEffect(() => {
     if (userDetails?.profileVisibility) {
       setValue("profileVisibility", userDetails.profileVisibility);
+      setValue("allowCloudGifts", userDetails.allowCloudGifts);
     }
     if (userDetails?.souvenirsVisibility) {
       setValue("souvenirsVisibility", userDetails.souvenirsVisibility);
@@ -192,8 +194,6 @@ export function SettingsAccount() {
                 }))}
                 disabled={isSubmitting}
               />
-
-              <small>{t("profile_visibility_description")}</small>
             </section>
           );
         }}
@@ -223,8 +223,6 @@ export function SettingsAccount() {
                 }))}
                 disabled={isSubmitting}
               />
-
-              <small>{t("souvenirs_visibility_description")}</small>
             </section>
           );
         }}
@@ -283,6 +281,25 @@ export function SettingsAccount() {
           {getHydraCloudSectionContent().callToAction}
         </Button>
       </section>
+
+      <Controller
+        control={control}
+        name="allowCloudGifts"
+        render={({ field }) => (
+          <section className="settings-account__section">
+            <h3>{t("cloud_gifts")}</h3>
+            <CheckboxField
+              checked={field.value ?? true}
+              disabled={isSubmitting}
+              label={t("allow_cloud_gifts")}
+              onChange={(event) => {
+                field.onChange(event.target.checked);
+                void handleSubmit(onSubmit)();
+              }}
+            />
+          </section>
+        )}
+      />
 
       <section className="settings-account__section">
         <h3>Session</h3>

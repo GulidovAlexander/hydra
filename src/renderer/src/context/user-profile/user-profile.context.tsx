@@ -1,4 +1,13 @@
-import { darkenColor, ensureArray } from "@renderer/helpers";
+import {
+  appendProfileLibraryFilterParams,
+  darkenColor,
+  ensureArray,
+  getProfileLibraryFilter,
+  readStoredProfilePlatform,
+  readStoredProfileSort,
+  readStoredSouvenirSort,
+  type ProfileLibraryFilter,
+} from "@renderer/helpers";
 import { useAppSelector, useToast } from "@renderer/hooks";
 import type {
   Badge,
@@ -30,13 +39,16 @@ export interface UserProfileContext {
   isMyOfficialProfile: boolean;
   userStats: UserStats | null;
   getUserProfile: () => Promise<void>;
-  getUserStats: (shops?: string[]) => Promise<void>;
+  getUserStats: (filter?: ProfileLibraryFilter) => Promise<void>;
   getUserLibraryGames: (
     sortBy?: string,
     reset?: boolean,
-    shops?: string[]
+    filter?: ProfileLibraryFilter
   ) => Promise<void>;
-  loadMoreLibraryGames: (sortBy?: string, shops?: string[]) => Promise<boolean>;
+  loadMoreLibraryGames: (
+    sortBy?: string,
+    filter?: ProfileLibraryFilter
+  ) => Promise<boolean>;
   setSelectedBackgroundImage: React.Dispatch<React.SetStateAction<string>>;
   backgroundImage: string;
   badges: Badge[];
@@ -46,6 +58,7 @@ export interface UserProfileContext {
   isLoadingLibraryGames: boolean;
   souvenirs: ProfileSouvenir[];
   souvenirsTotal: number;
+  hasReachedSouvenirLimit: boolean;
   souvenirsHiddenReason: SouvenirsHiddenReason;
   hasMoreSouvenirs: boolean;
   isLoadingSouvenirs: boolean;
@@ -55,7 +68,8 @@ export interface UserProfileContext {
     souvenirId: string,
     update: Partial<ProfileSouvenir>
   ) => void;
-  removeSouvenir: (souvenirId: string) => void;
+  removeSouvenir: (souvenirId: string) => Promise<void>;
+  loadedLibrarySortBy: string | null;
 }
 
 export const DEFAULT_USER_PROFILE_BACKGROUND = "#151515B3";
@@ -67,13 +81,16 @@ export const userProfileContext = createContext<UserProfileContext>({
   isMyOfficialProfile: false,
   userStats: null,
   getUserProfile: async () => {},
-  getUserStats: async (_shops?: string[]) => {},
+  getUserStats: async (_filter?: ProfileLibraryFilter) => {},
   getUserLibraryGames: async (
     _sortBy?: string,
     _reset?: boolean,
-    _shops?: string[]
+    _filter?: ProfileLibraryFilter
   ) => {},
-  loadMoreLibraryGames: async (_sortBy?: string, _shops?: string[]) => false,
+  loadMoreLibraryGames: async (
+    _sortBy?: string,
+    _filter?: ProfileLibraryFilter
+  ) => false,
   setSelectedBackgroundImage: () => {},
   backgroundImage: "",
   badges: [],
@@ -83,17 +100,21 @@ export const userProfileContext = createContext<UserProfileContext>({
   isLoadingLibraryGames: false,
   souvenirs: [],
   souvenirsTotal: 0,
+  hasReachedSouvenirLimit: false,
   souvenirsHiddenReason: null,
   hasMoreSouvenirs: false,
   isLoadingSouvenirs: false,
   getUserSouvenirs: async () => false,
   loadMoreSouvenirs: async () => false,
   updateSouvenir: () => {},
-  removeSouvenir: () => {},
+  removeSouvenir: async () => {},
+  loadedLibrarySortBy: null,
 });
 
 const { Provider } = userProfileContext;
 export const { Consumer: UserProfileContextConsumer } = userProfileContext;
+
+const DEFAULT_PROFILE_LIBRARY_FILTER = getProfileLibraryFilter("all");
 
 export interface UserProfileContextProviderProps {
   children: React.ReactNode;
@@ -137,11 +158,16 @@ export function UserProfileContextProvider({
   const [isLoadingLibraryGames, setIsLoadingLibraryGames] = useState(false);
   const [souvenirs, setSouvenirs] = useState<ProfileSouvenir[]>([]);
   const [souvenirsTotal, setSouvenirsTotal] = useState(0);
+  const [hasReachedSouvenirLimit, setHasReachedSouvenirLimit] = useState(false);
   const [souvenirsHiddenReason, setSouvenirsHiddenReason] =
     useState<SouvenirsHiddenReason>(null);
   const [isLoadingSouvenirs, setIsLoadingSouvenirs] = useState(false);
   const souvenirRequestIdRef = useRef(0);
+  const [loadedLibrarySortBy, setLoadedLibrarySortBy] = useState<string | null>(
+    null
+  );
   const previousUserIdRef = useRef(userId);
+  const userStatsRequestIdRef = useRef(0);
 
   const isMe =
     userProfile?.id === authUserId ||
@@ -169,15 +195,19 @@ export function UserProfileContextProvider({
   const navigate = useNavigate();
 
   const getUserStats = useCallback(
-    async (shops = ["steam", "launchbox"]) => {
+    async (filter = DEFAULT_PROFILE_LIBRARY_FILTER) => {
       const params = new URLSearchParams();
-      shops.forEach((shop) => params.append("shop", shop));
+      appendProfileLibraryFilterParams(params, filter);
+
+      const requestId = ++userStatsRequestIdRef.current;
 
       window.electron.hydraApi
         .get<UserStats>(`/users/${userId}/stats?${params.toString()}`, {
           needsAuth: false,
         })
         .then((stats) => {
+          if (requestId !== userStatsRequestIdRef.current) return;
+
           if (!stats) {
             setUserStats(null);
             return;
@@ -196,9 +226,7 @@ export function UserProfileContextProvider({
           setUserStats({
             libraryCount: stats.libraryCount ?? 0,
             friendsCount: stats.friendsCount ?? 0,
-            totalPlayTimeInSeconds: toPercentile(
-              stats.totalPlayTimeInSeconds
-            ),
+            totalPlayTimeInSeconds: toPercentile(stats.totalPlayTimeInSeconds),
             achievementsPointsEarnedSum: stats.achievementsPointsEarnedSum
               ? toPercentile(stats.achievementsPointsEarnedSum)
               : undefined,
@@ -210,7 +238,11 @@ export function UserProfileContextProvider({
   );
 
   const getUserLibraryGames = useCallback(
-    async (sortBy?: string, reset = true, shops = ["steam", "launchbox"]) => {
+    async (
+      sortBy?: string,
+      reset = true,
+      filter = DEFAULT_PROFILE_LIBRARY_FILTER
+    ) => {
       if (reset) {
         setLibraryPage(0);
         setHasMoreLibraryGames(true);
@@ -221,7 +253,7 @@ export function UserProfileContextProvider({
         const params = new URLSearchParams();
         params.append("take", "12");
         params.append("skip", "0");
-        shops.forEach((shop) => params.append("shop", shop));
+        appendProfileLibraryFilterParams(params, filter);
         if (sortBy) {
           params.append("sortBy", sortBy);
         }
@@ -232,6 +264,10 @@ export function UserProfileContextProvider({
           library: UserGame[];
           pinnedGames: UserGame[];
         }>(url, { needsAuth: false });
+
+        if (reset) {
+          setLoadedLibrarySortBy(sortBy ?? null);
+        }
 
         if (response) {
           setLibraryGames(response.library);
@@ -256,7 +292,7 @@ export function UserProfileContextProvider({
   const loadMoreLibraryGames = useCallback(
     async (
       sortBy?: string,
-      shops = ["steam", "launchbox"]
+      filter = DEFAULT_PROFILE_LIBRARY_FILTER
     ): Promise<boolean> => {
       if (isLoadingLibraryGames || !hasMoreLibraryGames) {
         return false;
@@ -268,7 +304,7 @@ export function UserProfileContextProvider({
         const params = new URLSearchParams();
         params.append("take", "12");
         params.append("skip", String(nextPage * 12));
-        shops.forEach((shop) => params.append("shop", shop));
+        appendProfileLibraryFilterParams(params, filter);
         if (sortBy) {
           params.append("sortBy", sortBy);
         }
@@ -335,6 +371,7 @@ export function UserProfileContextProvider({
           (response?.items ?? []).map((item) => normalizeProfileSouvenir(item))
         );
         setSouvenirsTotal(response?.total ?? 0);
+        setHasReachedSouvenirLimit(response?.hasReachedLimit ?? false);
         setSouvenirsHiddenReason(response?.hiddenReason ?? null);
         return true;
       } catch {
@@ -342,6 +379,7 @@ export function UserProfileContextProvider({
 
         setSouvenirs([]);
         setSouvenirsTotal(0);
+        setHasReachedSouvenirLimit(false);
         setSouvenirsHiddenReason(null);
         return false;
       } finally {
@@ -381,6 +419,7 @@ export function UserProfileContextProvider({
           return [...current, ...nextItems];
         });
         setSouvenirsTotal(response.total);
+        setHasReachedSouvenirLimit(response.hasReachedLimit);
         setSouvenirsHiddenReason(response.hiddenReason);
         return true;
       } catch {
@@ -409,19 +448,35 @@ export function UserProfileContextProvider({
     []
   );
 
-  const removeSouvenir = useCallback((souvenirId: string) => {
-    const key = getSouvenirKey(souvenirId);
+  const removeSouvenir = useCallback(
+    async (souvenirId: string) => {
+      const key = getSouvenirKey(souvenirId);
+      const requestId = souvenirRequestIdRef.current;
 
-    setSouvenirs((current) =>
-      current.filter((souvenir) => getSouvenirKey(souvenir.id) !== key)
-    );
-    setSouvenirsTotal((current) => Math.max(0, current - 1));
-  }, []);
+      setSouvenirs((current) =>
+        current.filter((souvenir) => getSouvenirKey(souvenir.id) !== key)
+      );
+      setSouvenirsTotal((current) => Math.max(0, current - 1));
+
+      try {
+        const response = await fetchSouvenirsPage("recent", 0);
+        if (requestId !== souvenirRequestIdRef.current || !response) return;
+
+        setHasReachedSouvenirLimit(response.hasReachedLimit);
+      } catch {
+        // Keep the last server-provided value until the next successful refresh.
+      }
+    },
+    [fetchSouvenirsPage]
+  );
 
   const getUserProfile = useCallback(async () => {
-    getUserStats();
-    getUserLibraryGames();
-    void getUserSouvenirs("recent");
+    const storedFilter = getProfileLibraryFilter(readStoredProfilePlatform());
+
+    getUserStats(storedFilter);
+
+    getUserLibraryGames(readStoredProfileSort(), true, storedFilter);
+    void getUserSouvenirs(readStoredSouvenirSort());
 
     const profileParams = new URLSearchParams();
     profileParams.append("shop", "steam");
@@ -490,6 +545,7 @@ export function UserProfileContextProvider({
       setHasMoreLibraryGames(true);
       setSouvenirs([]);
       setSouvenirsTotal(0);
+      setHasReachedSouvenirLimit(false);
       setSouvenirsHiddenReason(null);
     }
 
@@ -518,6 +574,7 @@ export function UserProfileContextProvider({
         isLoadingLibraryGames,
         souvenirs,
         souvenirsTotal,
+        hasReachedSouvenirLimit,
         souvenirsHiddenReason,
         hasMoreSouvenirs: souvenirs.length < souvenirsTotal,
         isLoadingSouvenirs,
@@ -525,6 +582,7 @@ export function UserProfileContextProvider({
         loadMoreSouvenirs,
         updateSouvenir,
         removeSouvenir,
+        loadedLibrarySortBy,
       }}
     >
       {children}

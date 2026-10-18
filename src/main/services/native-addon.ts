@@ -6,6 +6,7 @@ import { Worker } from "node:worker_threads";
 import { app } from "electron";
 import type { ProcessPayload } from "./download/types";
 import type {
+  BuildLocalGameSnapshotInput,
   BuildLocalGameSnapshotPipelineInput,
   BuildSnapshotAggregateHashInput,
   DeleteLocalSaveTarget,
@@ -32,7 +33,7 @@ type NativeProcessProfileImageResponse = {
   mime_type?: string;
 };
 
-type NativeProcessFriendImageResponse = NativeProcessProfileImageResponse & {
+type NativeProcessSizedImageResponse = NativeProcessProfileImageResponse & {
   isAnimated?: boolean;
   is_animated?: boolean;
 };
@@ -45,21 +46,27 @@ type NativeActiveWindowResponse = {
 };
 
 type HydraNativeModule = {
+  torrentInitialize: (port: number) => Promise<void>;
+  torrentRequest: (method: string, paramsJson: string) => Promise<string>;
+  torrentShutdown: () => Promise<void>;
   processProfileImage: (
     imagePath: string,
     targetExtension?: string
   ) => NativeProcessProfileImageResponse;
-  processFriendImage: (
+  processImage: (
     imagePath: string,
     outputPathBase: string,
     width: number,
     height: number,
     preserveAnimation: boolean
-  ) => Promise<NativeProcessFriendImageResponse>;
+  ) => Promise<NativeProcessSizedImageResponse>;
   listProcesses: () => ProcessPayload[];
   getLinuxActiveWindow: () => NativeActiveWindowResponse | null;
   buildLocalGameSnapshotPipeline: (
     input: BuildLocalGameSnapshotPipelineInput
+  ) => Promise<NativeLocalGameSnapshotPipelineResult>;
+  buildLocalGameSnapshot: (
+    input: BuildLocalGameSnapshotInput
   ) => Promise<NativeLocalGameSnapshotPipelineResult>;
   getSaveRulesForGame: (
     input: GetSaveRulesForGameInput
@@ -197,6 +204,18 @@ type PendingResolver =
   | { type: "map"; resolve: (m: SystemProcessMap | null) => void };
 
 export class NativeAddon {
+  public static torrentInitialize(port: number) {
+    return this.load().torrentInitialize(port);
+  }
+
+  public static torrentRequest(method: string, paramsJson: string) {
+    return this.load().torrentRequest(method, paramsJson);
+  }
+
+  public static torrentShutdown() {
+    // Quitting an app which never used torrenting must not load the addon.
+    return this.nativeModule?.torrentShutdown() ?? Promise.resolve();
+  }
   private static nativeModule: HydraNativeModule | null = null;
   private static worker: Worker | null = null;
   private static pendingResolvers: PendingResolver[] = [];
@@ -313,7 +332,7 @@ export class NativeAddon {
     }
   }
 
-  public static async processFriendImage(
+  public static async processImage(
     imagePath: string,
     outputPathBase: string,
     width: number,
@@ -321,7 +340,7 @@ export class NativeAddon {
     preserveAnimation: boolean
   ) {
     try {
-      const response = await this.load().processFriendImage(
+      const response = await this.load().processImage(
         imagePath,
         outputPathBase,
         width,
@@ -353,7 +372,7 @@ export class NativeAddon {
     const drained = this.pendingResolvers.splice(0);
     for (const pending of drained) {
       if (pending.type === "list") pending.resolve([]);
-else
+      else
         pending.resolve({
           processMap: {},
           winePrefixMap: {},
@@ -416,6 +435,10 @@ else
     input: BuildLocalGameSnapshotPipelineInput
   ) {
     return this.load().buildLocalGameSnapshotPipeline(input);
+  }
+
+  public static buildLocalGameSnapshot(input: BuildLocalGameSnapshotInput) {
+    return this.load().buildLocalGameSnapshot(input);
   }
 
   public static getSaveRulesForGame(input: GetSaveRulesForGameInput) {

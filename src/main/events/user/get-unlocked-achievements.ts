@@ -1,70 +1,21 @@
-import type { GameShop, User, UserAchievement, UserPreferences } from "@types";
+import type { GameShop, UserAchievement, UserPreferences } from "@types";
 import { registerEvent } from "../register-event";
 import { getGameAchievementData } from "@main/services/achievements/get-game-achievement-data";
-import { db, levelKeys } from "@main/level";
+import { db, gameAchievementsSublevel, levelKeys } from "@main/level";
 import { AchievementWatcherManager } from "@main/services/achievements/achievement-watcher-manager";
 import { AchievementMemoryStore } from "@main/services/achievements/achievement-memory-store";
 import { AchievementSouvenirStore } from "@main/services/achievements/achievement-souvenir-store";
-import { HydraApi } from "@main/services/hydra-api";
-import { achievementsLogger } from "@main/services/logger";
-
-const fetchAchievementSouvenirs = async (
-  objectId: string,
-  shop: GameShop,
-  language: string
-) => {
-  const user = await db.get<string, User>(levelKeys.user, {
-    valueEncoding: "json",
-  });
-
-  if (!user?.id) return new Map<string, string>();
-
-  const remoteAchievements = await HydraApi.get<UserAchievement[]>(
-    `/users/${user.id}/games/achievements`,
-    { shop, objectId, language }
-  );
-
-  return new Map(
-    remoteAchievements
-      .filter((achievement) => achievement.imageUrl)
-      .map((achievement) => [
-        achievement.name.toUpperCase(),
-        achievement.imageUrl!,
-      ])
-  );
-};
-
-const getAchievementSouvenirs = async (
-  objectId: string,
-  shop: GameShop,
-  language: string
-) => {
-  const cachedSouvenirs = AchievementSouvenirStore.get(shop, objectId);
-
-  if (cachedSouvenirs) return cachedSouvenirs;
-
-  try {
-    const souvenirs = await fetchAchievementSouvenirs(objectId, shop, language);
-    AchievementSouvenirStore.set(shop, objectId, souvenirs);
-
-    return souvenirs;
-  } catch (error) {
-    achievementsLogger.error(
-      "Failed to fetch achievement souvenirs",
-      objectId,
-      error
-    );
-
-    return new Map<string, string>();
-  }
-};
+import { fetchRemoteUserGameAchievements } from "@main/services/achievements/get-achievement-souvenirs";
+import { mergeUnlockedAchievementLists } from "@main/services/achievements/merge-unlocked-achievements";
 
 export const getUnlockedAchievements = async (
   objectId: string,
   shop: GameShop,
   useCachedData: boolean
 ): Promise<UserAchievement[]> => {
-  const cachedAchievements = AchievementMemoryStore.get(shop, objectId);
+  const cachedAchievements = await gameAchievementsSublevel
+    .get(levelKeys.game(shop, objectId))
+    .catch(() => null);
 
   const userPreferences = await db.get<string, UserPreferences | null>(
     levelKeys.userPreferences,
@@ -82,17 +33,50 @@ export const getUnlockedAchievements = async (
     useCachedData
   );
 
-  const unlockedAchievements = cachedAchievements?.unlockedAchievements ?? [];
-
   if (!useCachedData) AchievementSouvenirStore.invalidate(shop, objectId);
 
-  const souvenirs = await getAchievementSouvenirs(
+  const remote = await fetchRemoteUserGameAchievements(
     objectId,
     shop,
     userPreferences?.language ?? "en"
+  ).catch(() => ({
+    souvenirs: new Map<string, string>(),
+    unlocked: [],
+    achievements: [],
+  }));
+
+  AchievementSouvenirStore.set(shop, objectId, remote.souvenirs);
+
+  const persistedUnlocked = cachedAchievements?.unlockedAchievements ?? [];
+  const unlockedAchievements = mergeUnlockedAchievementLists(
+    mergeUnlockedAchievementLists(remote.unlocked, persistedUnlocked),
+    AchievementMemoryStore.get(shop, objectId)?.unlockedAchievements ?? []
   );
 
-  return achievementsData
+  const current = AchievementMemoryStore.get(shop, objectId);
+  AchievementMemoryStore.set(shop, objectId, {
+    achievements: current?.achievements ?? achievementsData,
+    unlockedAchievements,
+    language: current?.language ?? cachedAchievements?.language,
+    catalogueValidator:
+      current?.catalogueValidator ?? cachedAchievements?.catalogueValidator,
+  });
+
+  const catalogueAchievements =
+    achievementsData.length > 0
+      ? achievementsData
+      : remote.achievements.map((achievement) => ({
+          name: achievement.name,
+          displayName: achievement.displayName || achievement.name,
+          description: achievement.description,
+          icon: achievement.icon || "",
+          icongray: achievement.icongray || achievement.icon || "",
+          hidden: Boolean(achievement.hidden),
+        }));
+
+  const souvenirs = remote.souvenirs;
+
+  return catalogueAchievements
     .map((achievementData) => {
       const unlockedAchievementData = unlockedAchievements.find(
         (localAchievement) => {

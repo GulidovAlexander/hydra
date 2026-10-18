@@ -5,20 +5,42 @@ import {
   Button,
   CheckboxField,
   ConfirmationModal,
+  GuideLink,
   TextField,
 } from "@renderer/components";
 import { settingsContext } from "@renderer/context";
 import { useAppSelector, useUserDetails } from "@renderer/hooks";
 import { useSubscription } from "@renderer/hooks/use-subscription";
-import {
-  FileDirectoryIcon,
-  HistoryIcon,
-  QuestionIcon,
-} from "@primer/octicons-react";
+import { FileDirectoryIcon, HistoryIcon } from "@primer/octicons-react";
 import { useLocation } from "react-router-dom";
 import { isAchievementSouvenirsEnabled } from "@shared";
+import type { UserPreferences } from "@types";
 
 import "./settings-behavior.scss";
+
+const buildForm = (preferences: UserPreferences | null) => ({
+  autoplayGameTrailers: preferences?.autoplayGameTrailers ?? true,
+  disableNsfwAlert: preferences?.disableNsfwAlert ?? false,
+  showHiddenAchievementsDescription:
+    preferences?.showHiddenAchievementsDescription ?? false,
+  enableSteamAchievements: preferences?.enableSteamAchievements ?? false,
+  enableAchievementSouvenirs: isAchievementSouvenirsEnabled(
+    preferences?.enableAchievementSouvenirs,
+    window.electron.platform
+  ),
+  enableNewDownloadOptionsBadges:
+    preferences?.enableNewDownloadOptionsBadges ?? true,
+  hideClassicsBookmark: preferences?.hideClassicsBookmark ?? false,
+  classicsUseHeroLayout: preferences?.classicsUseHeroLayout ?? false,
+  hideLibraryGameBadges: preferences?.hideLibraryGameBadges ?? false,
+  hideLibraryReadySizeBadges: preferences?.hideLibraryReadySizeBadges ?? false,
+  hideLibraryClassicsBadges: preferences?.hideLibraryClassicsBadges ?? false,
+  hideSteamLibraryBadges: preferences?.hideSteamLibraryBadges ?? false,
+  hideLibraryAchievementProgress:
+    preferences?.hideLibraryAchievementProgress ?? false,
+  autoplayAnimatedArtwork: preferences?.autoplayAnimatedArtwork ?? false,
+  persistFiltersAndSorting: preferences?.persistFiltersAndSorting ?? false,
+});
 
 export function SettingsContextContentGameplay() {
   const { t } = useTranslation("settings");
@@ -31,19 +53,7 @@ export function SettingsContextContentGameplay() {
     (state) => state.userPreferences.value
   );
 
-  const [form, setForm] = useState({
-    autoplayGameTrailers: true,
-    disableNsfwAlert: false,
-    showHiddenAchievementsDescription: false,
-    enableSteamAchievements: false,
-    enableAchievementSouvenirs: isAchievementSouvenirsEnabled(
-      undefined,
-      window.electron.platform
-    ),
-    enableNewDownloadOptionsBadges: true,
-    hideClassicsBookmark: false,
-    classicsUseHeroLayout: false,
-  });
+  const [form, setForm] = useState(() => buildForm(userPreferences));
   const [showWaylandSouvenirsWarning, setShowWaylandSouvenirsWarning] =
     useState(false);
   const [screenshotsPath, setScreenshotsPath] = useState("");
@@ -57,21 +67,7 @@ export function SettingsContextContentGameplay() {
   useEffect(() => {
     if (!userPreferences) return;
 
-    setForm({
-      autoplayGameTrailers: userPreferences.autoplayGameTrailers ?? true,
-      disableNsfwAlert: userPreferences.disableNsfwAlert ?? false,
-      showHiddenAchievementsDescription:
-        userPreferences.showHiddenAchievementsDescription ?? false,
-      enableSteamAchievements: userPreferences.enableSteamAchievements ?? false,
-      enableAchievementSouvenirs: isAchievementSouvenirsEnabled(
-        userPreferences.enableAchievementSouvenirs,
-        window.electron.platform
-      ),
-      enableNewDownloadOptionsBadges:
-        userPreferences.enableNewDownloadOptionsBadges ?? true,
-      hideClassicsBookmark: userPreferences.hideClassicsBookmark ?? false,
-      classicsUseHeroLayout: userPreferences.classicsUseHeroLayout ?? false,
-    });
+    setForm(buildForm(userPreferences));
   }, [userPreferences]);
 
   useEffect(() => {
@@ -179,29 +175,45 @@ export function SettingsContextContentGameplay() {
             })
           }
         />
+
+        <CheckboxField
+          label={t("enable_new_download_options_badges")}
+          checked={form.enableNewDownloadOptionsBadges}
+          onChange={() =>
+            handleChange({
+              enableNewDownloadOptionsBadges:
+                !form.enableNewDownloadOptionsBadges,
+            })
+          }
+        />
+
+        <CheckboxField
+          label={t("persist_filters_and_sorting")}
+          checked={form.persistFiltersAndSorting}
+          onChange={() =>
+            handleChange({
+              persistFiltersAndSorting: !form.persistFiltersAndSorting,
+            })
+          }
+        />
       </div>
 
       <div className="settings-context-panel__group">
         <h3>{t("gameplay_metadata")}</h3>
 
-        <div className={`settings-behavior__checkbox-container--with-tooltip`}>
-          <CheckboxField
-            label={t("enable_steam_achievements")}
-            checked={form.enableSteamAchievements}
-            onChange={() =>
-              handleChange({
-                enableSteamAchievements: !form.enableSteamAchievements,
-              })
-            }
-          />
-
-          <small
-            className="settings-behavior__checkbox-container--tooltip"
-            data-open-article="steam-achievements"
-          >
-            <QuestionIcon size={12} />
-          </small>
-        </div>
+        <CheckboxField
+          label={
+            <GuideLink article="steam-achievements">
+              {t("enable_steam_achievements")}
+            </GuideLink>
+          }
+          checked={form.enableSteamAchievements}
+          onChange={() =>
+            handleChange({
+              enableSteamAchievements: !form.enableSteamAchievements,
+            })
+          }
+        />
 
         {hasActiveSubscription ? (
           <CheckboxField
@@ -272,14 +284,68 @@ export function SettingsContextContentGameplay() {
             {t("open_screenshots_directory")}
           </Button>
         </div>
+      </div>
+
+      <div className="settings-context-panel__group">
+        <h3>{t("library_appearance")}</h3>
 
         <CheckboxField
-          label={t("enable_new_download_options_badges")}
-          checked={form.enableNewDownloadOptionsBadges}
+          label={t("hide_library_game_badges")}
+          checked={form.hideLibraryGameBadges}
           onChange={() =>
             handleChange({
-              enableNewDownloadOptionsBadges:
-                !form.enableNewDownloadOptionsBadges,
+              hideLibraryGameBadges: !form.hideLibraryGameBadges,
+            })
+          }
+        />
+
+        <CheckboxField
+          label={t("hide_library_ready_size_badges")}
+          checked={form.hideLibraryReadySizeBadges}
+          onChange={() =>
+            handleChange({
+              hideLibraryReadySizeBadges: !form.hideLibraryReadySizeBadges,
+            })
+          }
+        />
+
+        <CheckboxField
+          label={t("hide_library_classics_badges")}
+          checked={form.hideLibraryClassicsBadges}
+          onChange={() =>
+            handleChange({
+              hideLibraryClassicsBadges: !form.hideLibraryClassicsBadges,
+            })
+          }
+        />
+
+        <CheckboxField
+          label={t("hide_library_steam_badges")}
+          checked={form.hideSteamLibraryBadges}
+          onChange={() =>
+            handleChange({
+              hideSteamLibraryBadges: !form.hideSteamLibraryBadges,
+            })
+          }
+        />
+
+        <CheckboxField
+          label={t("hide_library_achievement_progress")}
+          checked={form.hideLibraryAchievementProgress}
+          onChange={() =>
+            handleChange({
+              hideLibraryAchievementProgress:
+                !form.hideLibraryAchievementProgress,
+            })
+          }
+        />
+
+        <CheckboxField
+          label={t("autoplay_animated_artwork")}
+          checked={form.autoplayAnimatedArtwork}
+          onChange={() =>
+            handleChange({
+              autoplayAnimatedArtwork: !form.autoplayAnimatedArtwork,
             })
           }
         />

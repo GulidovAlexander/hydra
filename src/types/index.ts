@@ -104,7 +104,10 @@ export type UserGame = {
   achievementCount: number;
   achievementsPointsEarnedSum: number;
   hasManuallyUpdatedPlaytime: boolean;
+  hasActiveSteamImport?: boolean;
   isFavorite: boolean;
+  isHiddenFromOthers?: boolean;
+  isConcealed?: boolean;
   isPinned: boolean;
   pinnedDate?: Date | null;
   customLibraryImageUrl?: string | null;
@@ -129,6 +132,7 @@ export interface GameRunning {
   id: string;
   title: string;
   iconUrl: string | null;
+  customIconUrl?: string | null;
   coverImageUrl?: string | null;
   objectId: string;
   shop: GameShop;
@@ -236,6 +240,7 @@ export interface UserRelation {
 export type UserProfileCurrentGame = GameRunning &
   ShopAssets & {
     sessionDurationInSeconds: number;
+    isHiddenFromOthers?: boolean;
   };
 
 export type ProfileVisibility = "PUBLIC" | "PRIVATE" | "FRIENDS";
@@ -259,6 +264,7 @@ export interface UserDetails {
   profileImageUrl: string | null;
   backgroundImageUrl: string | null;
   profileVisibility: ProfileVisibility;
+  allowCloudGifts: boolean;
   souvenirsVisibility: ProfileVisibility;
   bio: string;
   workwondersJwt: string;
@@ -325,6 +331,7 @@ export interface ProfileSouvenir {
 export interface SouvenirsResponse {
   items: Array<ProfileSouvenir | ProfileAchievement>;
   total: number;
+  hasReachedLimit: boolean;
   hiddenReason: SouvenirsHiddenReason;
 }
 
@@ -344,6 +351,8 @@ export interface UserProfile {
   currentGame: UserProfileCurrentGame | null;
   bio: string;
   hasActiveSubscription: boolean;
+  canReceiveCloudGift: boolean;
+  allowCloudGifts?: boolean;
   karma: number;
   quirks: {
     backupsPerGameLimit: number;
@@ -361,6 +370,12 @@ export interface UpdateProfileRequest {
   backgroundImageUrl?: string | null;
   bio?: string;
   language?: string;
+  allowCloudGifts?: boolean;
+}
+
+export interface OpenCheckoutOptions {
+  path?: "/" | "/gift" | `/gifts/${string}`;
+  recipientId?: string;
 }
 
 export interface DownloadSourceDownload {
@@ -391,6 +406,7 @@ export interface GameReviewAnswer {
     id: string;
     displayName: string;
     profileImageUrl: string | null;
+    backgroundImageUrl?: string | null;
   };
   translations: {
     [key: string]: string;
@@ -416,6 +432,7 @@ export interface GameReview {
     id: string;
     displayName: string;
     profileImageUrl: string | null;
+    backgroundImageUrl?: string | null;
   };
   translations: {
     [key: string]: string;
@@ -542,7 +559,8 @@ export type NotificationType =
   | "SOUVENIR_LIKE"
   | "RETROACHIEVEMENTS_CREDENTIALS_RESTORED"
   | "RETROACHIEVEMENTS_CREDENTIALS_INVALID"
-  | "RETROACHIEVEMENTS_SYNC_FAILED";
+  | "RETROACHIEVEMENTS_SYNC_FAILED"
+  | "CLOUD_GIFT_RECEIVED";
 
 export type LocalNotificationType =
   | "EXTRACTION_COMPLETE"
@@ -710,6 +728,7 @@ export type UserGameDetails = ShopAssets & {
 
 export * from "./game.types";
 export * from "./steam.types";
+export * from "./steam-integration.types";
 export * from "./download.types";
 export * from "./ludusavi.types";
 export * from "./how-long-to-beat.types";
@@ -720,3 +739,8 @@ export * from "./retroarch.types";
 export * from "./artwork.types";
 export * from "./cloud-save.types";
 export * from "./souvenir.types";
+
+export type ExtractionFailure =
+  | { reason: "unsupported-format"; format: string }
+  | { reason: "file-not-found" };
+export type { SystemPowerAction } from "./system-power";
