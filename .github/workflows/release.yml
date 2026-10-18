@@ -85,7 +85,11 @@ jobs:
 
       - name: Install Linux native build prerequisites
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config curl zip unzip tar autoconf automake libtool
+        # The Linux package bundles the Windows Epic prerequisite runner (run
+        # under Wine), cross-compiled for x86_64-pc-windows-gnu with mingw.
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build pkg-config curl zip unzip tar autoconf automake libtool gcc-mingw-w64-x86-64
 
       - name: Install dependencies
         run: yarn --frozen-lockfile
