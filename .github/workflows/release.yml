@@ -161,7 +161,15 @@ jobs:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_ACTOR_ID: ${{ github.actor_id }}
           BUILD_FLAVOR: release
-        run: node scripts/upload-build.cjs
+        # Fork: there is no S3 bucket, and the upload script throws on missing
+        # credentials, which would skip the GitHub release below.
+        shell: bash
+        run: |
+          if [ -z "$S3_ENDPOINT" ]; then
+            echo "S3 secrets not configured, skipping build upload"
+            exit 0
+          fi
+          node scripts/upload-build.cjs
 
       - name: Release
         uses: softprops/action-gh-release@v2
