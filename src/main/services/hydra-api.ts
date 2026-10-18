@@ -1,4 +1,7 @@
+import { clearGamesPlaytimeState } from "./game-running-state";
+import { clearStaleEpicImports } from "./epic/import-cleanup";
 import axios, { AxiosError, AxiosInstance } from "axios";
+import jwt from "jsonwebtoken";
 import { WindowManager } from "./window-manager";
 import url from "url";
 import { uploadGamesBatch } from "./library-sync";
@@ -11,10 +14,21 @@ import { db } from "@main/level";
 import { levelKeys } from "@main/level/sublevels";
 import type { Auth, User } from "@types";
 import { SSEClient } from "./sse";
+import { FriendsSnapshotCache } from "./friends-snapshot";
+import { ChatUnreadStore } from "./chat/chat-unread-store";
+import { clearChatSenderProfiles } from "./chat/chat-sender-profiles";
+import { closeChatNotifications } from "./notifications";
+import { trimTrailingSlashes } from "../../shared/trim-trailing-slashes.js";
 import {
   sanitizeNetworkLogPayload,
   summarizeNetworkLogPayload,
 } from "./network-log-payload";
+import { summarizeNetworkError } from "./network-error-summary";
+import {
+  HydraAuthContextTracker,
+  waitForHydraAuthRefresh,
+  type HydraApiAuthContext,
+} from "./hydra-auth-context";
 
 declare module "axios" {
   interface AxiosRequestConfig {
@@ -30,6 +44,8 @@ export interface HydraApiOptions {
   validateStatus?: (status: number) => boolean;
   signal?: AbortSignal;
   logResponseBody?: boolean;
+  timeout?: number;
+  authContext?: HydraApiAuthContext;
 }
 
 interface HydraApiUserAuth {
@@ -42,8 +58,117 @@ interface HydraApiUserAuth {
 export class HydraApi {
   private static instance: AxiosInstance;
   private static officialInstance: AxiosInstance;
+  private static readonly authContexts = new HydraAuthContextTracker();
+  private static authPersistence: Promise<void> = Promise.resolve();
+  private static refreshInFlight: {
+    generation: number;
+    promise: Promise<{ accessToken: string; expiresIn: number }>;
+  } | null = null;
+
+  public static getAuthContext() {
+    return this.authContexts.getContext();
+  }
+
+  public static isAuthContextCurrent(context: HydraApiAuthContext) {
+    return this.authContexts.isCurrent(context);
+  }
+
+  public static onAuthContextChanged(listener: () => void) {
+    return this.authContexts.subscribe(listener);
+  }
+
+  /* The account that owns the local library: the self-hosted user while a
+     self-hosted session is active (fork), otherwise the official user. */
+  private static resolveAuthIdentity() {
+    if (this.selfHostedConfig?.userToken) {
+      const claims = jwt.decode(this.selfHostedConfig.userToken);
+      return {
+        environment: trimTrailingSlashes(this.selfHostedConfig.url),
+        userId:
+          claims && typeof claims === "object" && typeof claims.sub === "string"
+            ? claims.sub
+            : null,
+      };
+    }
+
+    const claims = jwt.decode(this.userAuth.authToken);
+    return {
+      environment: trimTrailingSlashes(import.meta.env.MAIN_VITE_API_URL),
+      userId:
+        claims &&
+        typeof claims === "object" &&
+        typeof claims.userId === "string"
+          ? claims.userId
+          : null,
+    };
+  }
+
+  private static activateAuthContext(generation: number) {
+    const { environment, userId } = this.resolveAuthIdentity();
+    this.authContexts.activate(environment, userId, generation);
+  }
+
+  /* Starts a new auth generation when the library owner changes, e.g. on
+     self-hosted sign-in/out, so in-flight work for the old owner is dropped. */
+  private static syncAuthContextIdentity() {
+    const next = this.resolveAuthIdentity();
+    const current = this.getAuthContext();
+    if (
+      current?.environment === next.environment &&
+      current?.userId === next.userId
+    ) {
+      return;
+    }
+    if (!current && !next.userId) return;
+    this.activateAuthContext(this.authContexts.invalidate());
+  }
+
+  private static assertAuthGeneration(generation: number) {
+    if (generation !== this.authContexts.generation) {
+      throw new UserNotLoggedInError();
+    }
+  }
+
+  private static persistAuth(auth: Auth, generation: number) {
+    return this.queueAuthPersistence(async () => {
+      this.assertAuthGeneration(generation);
+      await db.put<string, Auth>(levelKeys.auth, auth, {
+        valueEncoding: "json",
+      });
+      this.assertAuthGeneration(generation);
+    });
+  }
+
+  private static queueAuthPersistence(operation: () => Promise<void>) {
+    const write = this.authPersistence.then(operation);
+    this.authPersistence = write.catch(() => {});
+    return write;
+  }
+
+  public static persistUserCache(user: User, context: HydraApiAuthContext) {
+    return this.queueAuthPersistence(async () => {
+      if (!this.isAuthContextCurrent(context)) throw new UserNotLoggedInError();
+      await db.put<string, User>(levelKeys.user, user, {
+        valueEncoding: "json",
+      });
+      if (!this.isAuthContextCurrent(context)) throw new UserNotLoggedInError();
+    });
+  }
+
+  private static clearPersistedAuth(cleanupUserData?: () => Promise<void>) {
+    // Queue immediately when the session is invalidated. A preceding write must
+    // finish before deletion; a later login persists only after deletion/cleanup.
+    return this.queueAuthPersistence(async () => {
+      await db.batch([
+        { type: "del", key: levelKeys.auth },
+        { type: "del", key: levelKeys.user },
+      ]);
+      await cleanupUserData?.();
+    });
+  }
 
   private static readonly EXPIRATION_OFFSET_IN_MS = 1000 * 60 * 5; // 5 minutes
+  private static readonly AUTH_REFRESH_TIMEOUT_MS = 20_000;
   private static readonly ADD_LOG_INTERCEPTOR = true;
 
   private static readonly OFFICIAL_ONLY_PREFIXES = [
@@ -92,16 +217,19 @@ export class HydraApi {
       if (flags.useSelfHostedDownloadSources !== undefined)
         this.useSelfHostedDownloadSources = flags.useSelfHostedDownloadSources;
     }
+    this.syncAuthContextIdentity();
   }
 
   public static setSelfHostedUserToken(userToken: string) {
     if (this.selfHostedConfig) this.selfHostedConfig.userToken = userToken;
+    this.syncAuthContextIdentity();
   }
 
   public static clearSelfHostedConfig() {
     this.selfHostedConfig = null;
     if (this.instance)
       this.instance.defaults.baseURL = import.meta.env.MAIN_VITE_API_URL;
+    this.syncAuthContextIdentity();
   }
 
   public static isSelfHosted() {
@@ -290,7 +418,11 @@ export class HydraApi {
   }
 
   private static getInstanceForUrl(url: string): AxiosInstance {
-    if (this.selfHostedConfig && !this.isOfficialOnlyUrl(url)) {
+    // Without self-hosted the default instance already targets the official
+    // API and carries the (token-redacting) log interceptors.
+    if (!this.selfHostedConfig) return this.instance;
+
+    if (!this.isOfficialOnlyUrl(url)) {
       // Social URLs: route to official if toggle is off
       if (this.isSocialUrl(url) && !this.useSelfHostedSocial) {
         return this.officialInstance ?? this.instance;
@@ -322,7 +454,8 @@ export class HydraApi {
   }
 
   public static updateUserSubscription(
-    subscription?: { expiresAt: Date | string | null } | null
+    subscription?: { expiresAt: Date | string | null } | null,
+    options?: { freshUserId?: string; triggerSouvenirSync?: boolean }
   ) {
     this.userAuth.subscription = subscription
       ? { expiresAt: subscription.expiresAt }
@@ -338,10 +471,31 @@ export class HydraApi {
       );
     }
 
-    if (this.isLoggedIn() && this.hasActiveSubscription()) {
-      void import("./achievements/grouped-souvenir-worker").then(
-        ({ groupedSouvenirWorker }) => groupedSouvenirWorker.trigger()
-      );
+    if (
+      options?.triggerSouvenirSync !== false &&
+      this.isLoggedIn() &&
+      this.hasActiveSubscription()
+    ) {
+      void import("./achievements/grouped-souvenir-worker")
+        .then(async ({ groupedSouvenirWorker }) => {
+          if (
+            options?.freshUserId &&
+            this.getAuthContext()?.userId === options.freshUserId
+          ) {
+            await groupedSouvenirWorker.resumeAfterSubscriptionRefresh(
+              options.freshUserId,
+              subscription?.expiresAt ?? null
+            );
+            return;
+          }
+          await groupedSouvenirWorker.trigger();
+        })
+        .catch((error) =>
+          logger.error(
+            "Failed to resume grouped souvenir synchronization",
+            error
+          )
+        );
     }
   }
 
@@ -353,6 +507,15 @@ export class HydraApi {
 
     const { accessToken, expiresIn, refreshToken, workwondersJwt } = jsonData;
 
+    const generation = this.authContexts.invalidate();
+    clearGamesPlaytimeState();
+    this.userAuth = {
+      authToken: "",
+      refreshToken: "",
+      expirationTimestamp: 0,
+      subscription: null,
+    };
+
     const now = new Date();
 
     const tokenExpirationTimestamp =
@@ -360,11 +523,18 @@ export class HydraApi {
       this.secondsToMilliseconds(expiresIn) -
       this.EXPIRATION_OFFSET_IN_MS;
 
+    await clearStaleEpicImports(
+      null,
+      () => generation === this.authContexts.generation
+    );
     // When a self-hosted session is active, official sign-in must not wipe
     // remote ids — they map the self-hosted library (fork behavior).
     if (!this.selfHostedConfig) {
-      await clearGamesRemoteIds();
+      await clearGamesRemoteIds(
+        () => generation === this.authContexts.generation
+      );
     }
+    if (generation !== this.authContexts.generation) return;
 
     this.userAuth = {
       authToken: accessToken,
@@ -372,10 +542,16 @@ export class HydraApi {
       expirationTimestamp: tokenExpirationTimestamp,
       subscription: null,
     };
+    this.activateAuthContext(generation);
+    await clearStaleEpicImports(
+      this.getAuthContext(),
+      () => generation === this.authContexts.generation
+    );
 
     const { AchievementWatcherManager } = await import(
       "./achievements/achievement-watcher-manager"
     );
+    if (generation !== this.authContexts.generation) return;
     AchievementWatcherManager.resetSessionState();
 
     logger.log(
@@ -383,18 +559,21 @@ export class HydraApi {
       tokenExpirationTimestamp
     );
 
-    db.put<string, Auth>(
-      levelKeys.auth,
+    await this.persistAuth(
       {
         accessToken,
         refreshToken,
         tokenExpirationTimestamp,
         workwondersJwt,
       },
-      { valueEncoding: "json" }
-    );
+      generation
+    ).catch((error) => {
+      if (generation === this.authContexts.generation) throw error;
+    });
+    if (generation !== this.authContexts.generation) return;
 
     await getUserData().then((userDetails) => {
+      if (generation !== this.authContexts.generation) return;
       if (userDetails?.subscription) {
         this.updateUserSubscription({
           expiresAt: userDetails.subscription.expiresAt
@@ -403,16 +582,22 @@ export class HydraApi {
         });
       }
     });
+    if (generation !== this.authContexts.generation) return;
 
     const { groupedSouvenirWorker } = await import(
       "./achievements/grouped-souvenir-worker"
     );
+    if (generation !== this.authContexts.generation) return;
     void groupedSouvenirWorker.trigger();
 
     const { startSteamSyncOnStartup } = await import(
       "./steam-integration/steam-startup-sync"
     );
+    if (generation !== this.authContexts.generation) return;
     void startSteamSyncOnStartup();
+    const { startEpicSyncOnStartup } = await import("./epic");
+    if (generation !== this.authContexts.generation) return;
+    void startEpicSyncOnStartup();
 
     if (WindowManager.mainWindow) {
       if (this.selfHostedConfig) {
@@ -426,39 +611,70 @@ export class HydraApi {
         SSEClient.connect();
 
         const { syncDownloadSourcesFromApi } = await import("./user");
+        if (generation !== this.authContexts.generation) return;
         syncDownloadSourcesFromApi();
       }
     }
   }
 
-  static async handleSignOut() {
+  static async handleSignOut(cleanupUserData?: () => Promise<void>) {
+    const generation = this.authContexts.invalidate();
+    clearGamesPlaytimeState();
     this.userAuth = {
       authToken: "",
       refreshToken: "",
       expirationTimestamp: 0,
       subscription: null,
     };
+    // A self-hosted session outlives the official one (fork)
+    this.activateAuthContext(generation);
 
-    const { AchievementWatcherManager } = await import(
-      "./achievements/achievement-watcher-manager"
+    await clearStaleEpicImports(
+      null,
+      () => generation === this.authContexts.generation
     );
-    AchievementWatcherManager.resetSessionState();
-    const { stopAllLinuxGameCaptureSessions } = await import(
-      "./linux-game-capture-session"
-    );
-    stopAllLinuxGameCaptureSessions();
-    const { groupedSouvenirWorker } = await import(
-      "./achievements/grouped-souvenir-worker"
-    );
-    groupedSouvenirWorker.stop();
+    const persistence = this.clearPersistedAuth(cleanupUserData);
+    try {
+      const { AchievementWatcherManager } = await import(
+        "./achievements/achievement-watcher-manager"
+      );
+      if (generation !== this.authContexts.generation) return;
+      AchievementWatcherManager.resetSessionState();
+      const { stopAllLinuxGameCaptureSessions } = await import(
+        "./linux-game-capture-session"
+      );
+      if (generation !== this.authContexts.generation) return;
+      stopAllLinuxGameCaptureSessions();
+      const { groupedSouvenirWorker } = await import(
+        "./achievements/grouped-souvenir-worker"
+      );
+      if (generation !== this.authContexts.generation) return;
+      groupedSouvenirWorker.stop();
 
-    const { resetSteamStartupSync } = await import(
-      "./steam-integration/steam-startup-sync"
-    );
-    resetSteamStartupSync();
+      const { resetSteamStartupSync } = await import(
+        "./steam-integration/steam-startup-sync"
+      );
+      if (generation !== this.authContexts.generation) return;
+      resetSteamStartupSync();
 
-    this.sendSignOutEvent();
-    this.post("/auth/logout", {}, { needsAuth: false }).catch(() => {});
+      await persistence;
+      if (generation !== this.authContexts.generation) return;
+      this.sendSignOutEvent();
+      // Preserve the legacy unauthenticated call without reading a future
+      // account's token after an asynchronous request-validation gap.
+      this.instance
+        .post(
+          "/auth/logout",
+          {},
+          {
+            headers: { Authorization: "Bearer " },
+            timeout: this.AUTH_REFRESH_TIMEOUT_MS,
+          }
+        )
+        .catch(() => {});
+    } finally {
+      await persistence;
+    }
   }
 
   static async setupApi() {
@@ -487,7 +703,7 @@ export class HydraApi {
           return request;
         },
         (error) => {
-          logger.error("request error", error);
+          logger.error("request error", summarizeNetworkError(error));
           return Promise.reject(error);
         }
       );
@@ -529,7 +745,7 @@ export class HydraApi {
 
           if (error.request) {
             const errorData = error.toJSON();
-            logger.error("Request error:", errorData.code, errorData.message);
+            logger.error("Request error:", summarizeNetworkError(error));
             return Promise.reject(
               new Error(
                 `Request failed with ${errorData.code} ${errorData.message}`
@@ -537,7 +753,7 @@ export class HydraApi {
             );
           }
 
-          logger.error("Error", error.message);
+          logger.error("Error", summarizeNetworkError(error));
           return Promise.reject(error as Error);
         }
       );
@@ -587,31 +803,66 @@ export class HydraApi {
         ? { expiresAt: user.subscription?.expiresAt }
         : null,
     };
+    const generation = this.authContexts.invalidate();
+    clearGamesPlaytimeState();
+    this.activateAuthContext(generation);
+    await clearStaleEpicImports(
+      this.getAuthContext(),
+      () => generation === this.authContexts.generation
+    );
 
     if (!this.selfHostedConfig) {
       const updatedUserData = await getUserData();
-
-      this.userAuth.subscription = updatedUserData?.subscription
-        ? {
-            expiresAt: updatedUserData.subscription.expiresAt,
-          }
-        : null;
+      if (generation !== this.authContexts.generation) return;
+      this.updateUserSubscription(updatedUserData?.subscription);
     } else if (this.selfHostedConfig.userToken) {
       // Self-hosted with userToken — sync library on startup
       const { uploadGamesBatch } = await import("./library-sync");
-      await clearGamesRemoteIds();
+      await clearGamesRemoteIds(
+        () => generation === this.authContexts.generation
+      );
+      if (generation !== this.authContexts.generation) return;
       void uploadGamesBatch();
     }
   }
 
   private static sendSignOutEvent() {
+    FriendsSnapshotCache.clear();
+    ChatUnreadStore.clear();
+    clearChatSenderProfiles();
+    closeChatNotifications();
+    // Covers the 401 path too, which never goes through the sign-out event.
+    WindowManager.closeFriendsWindow();
+    WindowManager.closeChatWindow();
     WindowManager.sendToAppWindows("on-signout");
   }
 
   public static async refreshToken() {
-    const response = await this.instance.post(`/auth/refresh`, {
-      refreshToken: this.userAuth.refreshToken,
-    });
+    const generation = this.authContexts.generation;
+    if (!this.isLoggedIn()) throw new UserNotLoggedInError();
+    if (this.refreshInFlight?.generation === generation) {
+      return this.refreshInFlight.promise;
+    }
+    const promise = this.performTokenRefresh(generation);
+    this.refreshInFlight = { generation, promise };
+    try {
+      return await promise;
+    } finally {
+      if (this.refreshInFlight?.promise === promise)
+        this.refreshInFlight = null;
+    }
+  }
+
+  private static async performTokenRefresh(generation: number) {
+    const previousAuth = this.userAuth;
+    const response = await this.instance.post(
+      `/auth/refresh`,
+      {
+        refreshToken: previousAuth.refreshToken,
+      },
+      { timeout: this.AUTH_REFRESH_TIMEOUT_MS }
+    );
+    this.assertAuthGeneration(generation);
 
     const { accessToken, expiresIn } = response.data;
 
@@ -620,8 +871,11 @@ export class HydraApi {
       this.secondsToMilliseconds(expiresIn) -
       this.EXPIRATION_OFFSET_IN_MS;
 
-    this.userAuth.authToken = accessToken;
-    this.userAuth.expirationTimestamp = tokenExpirationTimestamp;
+    this.userAuth = {
+      ...previousAuth,
+      authToken: accessToken,
+      expirationTimestamp: tokenExpirationTimestamp,
+    };
 
     logger.log(
       "Token refreshed. New expiration:",
@@ -631,26 +885,29 @@ export class HydraApi {
     await db
       .get<string, Auth>(levelKeys.auth, { valueEncoding: "json" })
       .then((auth) => {
-        return db.put<string, Auth>(
-          levelKeys.auth,
+        this.assertAuthGeneration(generation);
+        return this.persistAuth(
           {
             ...auth,
             accessToken,
             tokenExpirationTimestamp,
           },
-          { valueEncoding: "json" }
+          generation
         );
       });
 
     return { accessToken, expiresIn };
   }
 
-  private static async revalidateAccessTokenIfExpired() {
+  private static async revalidateAccessTokenIfExpired(
+    generation: number,
+    options?: HydraApiOptions
+  ) {
     if (this.userAuth.expirationTimestamp < Date.now()) {
       try {
-        await this.refreshToken();
+        await waitForHydraAuthRefresh(this.refreshToken(), options ?? {});
       } catch (err) {
-        this.handleUnauthorizedError(err);
+        await this.handleUnauthorizedError(err, generation);
       }
     }
   }
@@ -677,8 +934,15 @@ export class HydraApi {
     return { headers: {} };
   }
 
-  private static readonly handleUnauthorizedError = async (err) => {
-    if (err instanceof AxiosError && err.response?.status === 401) {
+  private static readonly handleUnauthorizedError = async (
+    err: unknown,
+    generation = this.authContexts.generation
+  ) => {
+    if (
+      generation === this.authContexts.generation &&
+      err instanceof AxiosError &&
+      err.response?.status === 401
+    ) {
       if (this.selfHostedConfig) throw err;
 
       logger.error(
@@ -689,59 +953,76 @@ export class HydraApi {
         })
       );
 
+      const signedOutGeneration = this.authContexts.invalidate();
+      clearGamesPlaytimeState();
       this.userAuth = {
         authToken: "",
         expirationTimestamp: 0,
         refreshToken: "",
         subscription: null,
       };
-
-      const { AchievementWatcherManager } = await import(
-        "./achievements/achievement-watcher-manager"
+      await clearStaleEpicImports(
+        null,
+        () => signedOutGeneration === this.authContexts.generation
       );
-      AchievementWatcherManager.resetSessionState();
+      const persistence = this.clearPersistedAuth();
+      try {
+        const { AchievementWatcherManager } = await import(
+          "./achievements/achievement-watcher-manager"
+        );
+        if (signedOutGeneration !== this.authContexts.generation) throw err;
+        AchievementWatcherManager.resetSessionState();
 
-      const { stopAllLinuxGameCaptureSessions } = await import(
-        "./linux-game-capture-session"
-      );
-      stopAllLinuxGameCaptureSessions();
-      const { groupedSouvenirWorker } = await import(
-        "./achievements/grouped-souvenir-worker"
-      );
-      groupedSouvenirWorker.stop();
+        const { stopAllLinuxGameCaptureSessions } = await import(
+          "./linux-game-capture-session"
+        );
+        if (signedOutGeneration !== this.authContexts.generation) throw err;
+        stopAllLinuxGameCaptureSessions();
+        const { groupedSouvenirWorker } = await import(
+          "./achievements/grouped-souvenir-worker"
+        );
+        if (signedOutGeneration !== this.authContexts.generation) throw err;
+        groupedSouvenirWorker.stop();
 
-      db.batch([
-        {
-          type: "del",
-          key: levelKeys.auth,
-        },
-        {
-          type: "del",
-          key: levelKeys.user,
-        },
-      ]);
-
-      SSEClient.close();
-      this.sendSignOutEvent();
+        await persistence;
+        if (signedOutGeneration !== this.authContexts.generation) throw err;
+        SSEClient.close();
+        this.sendSignOutEvent();
+      } finally {
+        await persistence;
+      }
     }
 
     throw err;
   };
 
-  private static async validateOptions(url: string, options?: HydraApiOptions) {
-    const isOfficial = !this.selfHostedConfig || this.isOfficialOnlyUrl(url);
-
+  private static async validateOptions(options?: HydraApiOptions) {
+    const generation = this.authContexts.generation;
     const needsAuth = options?.needsAuth == undefined || options.needsAuth;
     const needsSubscription = options?.needsSubscription === true;
 
-    if (!isOfficial) return;
-
-    // In self-hosted mode, official-only requests are best-effort (no official JWT)
-    if (this.selfHostedConfig) return;
+    // In self-hosted mode the self-hosted server does its own auth, and
+    // official-only requests are best-effort (there may be no official JWT)
+    if (this.selfHostedConfig) {
+      if (
+        options?.authContext &&
+        !this.isAuthContextCurrent(options.authContext)
+      ) {
+        throw new UserNotLoggedInError();
+      }
+      return generation;
+    }
 
     if (needsAuth) {
       if (!this.isLoggedIn()) throw new UserNotLoggedInError();
-      await this.revalidateAccessTokenIfExpired();
+      if (
+        options?.authContext &&
+        !this.isAuthContextCurrent(options.authContext)
+      ) {
+        throw new UserNotLoggedInError();
+      }
+      await this.revalidateAccessTokenIfExpired(generation, options);
+      this.assertAuthGeneration(generation);
     }
 
     if (needsSubscription && !this.hasActiveSubscription()) {
@@ -751,17 +1032,60 @@ export class HydraApi {
         throw new SubscriptionRequiredError();
       }
     }
+    if (needsAuth) this.assertAuthGeneration(generation);
+    return generation;
   }
 
   private static async refreshUserSubscription() {
     if (!this.isLoggedIn()) return;
+    const generation = this.authContexts.generation;
 
     try {
       const userDetails = await getUserData();
+      if (generation !== this.authContexts.generation) return;
       if (userDetails) this.updateUserSubscription(userDetails.subscription);
     } catch (err) {
       logger.error("Failed to refresh subscription state", err);
     }
+  }
+
+  private static assertRequestScope(
+    options: HydraApiOptions | undefined,
+    generation: number
+  ) {
+    if (options?.needsAuth !== false) this.assertAuthGeneration(generation);
+    if (
+      options?.authContext &&
+      !this.isAuthContextCurrent(options.authContext)
+    ) {
+      throw new UserNotLoggedInError();
+    }
+  }
+
+  private static requestConfig(
+    options: HydraApiOptions | undefined,
+    generation: number,
+    url?: string
+  ) {
+    this.assertRequestScope(options, generation);
+    return {
+      ...this.getAxiosConfig(url),
+      signal: options?.signal,
+      timeout: options?.timeout,
+      logResponseBody: options?.logResponseBody,
+      ...(options?.validateStatus
+        ? { validateStatus: options.validateStatus }
+        : {}),
+    };
+  }
+
+  private static requestError(
+    err: unknown,
+    options: HydraApiOptions | undefined,
+    generation: number
+  ) {
+    if (options?.needsAuth === false) return Promise.reject(err);
+    return this.handleUnauthorizedError(err, generation);
   }
 
   static async get<T = any>(
@@ -769,27 +1093,23 @@ export class HydraApi {
     params?: any,
     options?: HydraApiOptions
   ) {
-    await this.validateOptions(url, options);
-
-    const headers = {
-      ...this.getAxiosConfig(url).headers,
-      "Hydra-If-Modified-Since": options?.ifModifiedSince?.toUTCString(),
-      "If-None-Match": options?.ifNoneMatch,
-    };
-
+    const generation = await this.validateOptions(options);
+    const config = this.requestConfig(options, generation, url);
     return this.getInstanceForUrl(url)
       .get<T>(url, {
+        ...config,
         params,
-        ...this.getAxiosConfig(url),
-        headers,
-        ...(options?.validateStatus
-          ? { validateStatus: options.validateStatus }
-          : {}),
-        signal: options?.signal,
-        logResponseBody: options?.logResponseBody,
+        headers: {
+          ...config.headers,
+          "Hydra-If-Modified-Since": options?.ifModifiedSince?.toUTCString(),
+          "If-None-Match": options?.ifNoneMatch,
+        },
       })
-      .then((response) => response.data)
-      .catch(this.handleUnauthorizedError);
+      .then((response) => {
+        this.assertRequestScope(options, generation);
+        return response.data;
+      })
+      .catch((err) => this.requestError(err, options, generation));
   }
 
   static async getResponse<T = any>(
@@ -797,30 +1117,27 @@ export class HydraApi {
     params?: any,
     options?: HydraApiOptions
   ) {
-    await this.validateOptions(url, options);
-
-    const headers = {
-      ...this.getAxiosConfig(url).headers,
-      "Hydra-If-Modified-Since": options?.ifModifiedSince?.toUTCString(),
-      "If-None-Match": options?.ifNoneMatch,
-    };
-
+    const generation = await this.validateOptions(options);
+    const config = this.requestConfig(options, generation, url);
     return this.getInstanceForUrl(url)
       .get<T>(url, {
+        ...config,
         params,
-        ...this.getAxiosConfig(url),
-        headers,
-        ...(options?.validateStatus
-          ? { validateStatus: options.validateStatus }
-          : {}),
-        signal: options?.signal,
+        headers: {
+          ...config.headers,
+          "Hydra-If-Modified-Since": options?.ifModifiedSince?.toUTCString(),
+          "If-None-Match": options?.ifNoneMatch,
+        },
       })
-      .then((response) => ({
-        status: response.status,
-        data: response.data,
-        headers: response.headers,
-      }))
-      .catch(this.handleUnauthorizedError);
+      .then((response) => {
+        this.assertRequestScope(options, generation);
+        return {
+          status: response.status,
+          data: response.data,
+          headers: response.headers,
+        };
+      })
+      .catch((err) => this.requestError(err, options, generation));
   }
 
   static async post<T = any>(
@@ -828,15 +1145,14 @@ export class HydraApi {
     data?: any,
     options?: HydraApiOptions
   ) {
-    await this.validateOptions(url, options);
-
+    const generation = await this.validateOptions(options);
     return this.getInstanceForUrl(url)
-      .post<T>(url, data, {
-        ...this.getAxiosConfig(url),
-        signal: options?.signal,
+      .post<T>(url, data, this.requestConfig(options, generation, url))
+      .then((response) => {
+        this.assertRequestScope(options, generation);
+        return response.data;
       })
-      .then((response) => response.data)
-      .catch(this.handleUnauthorizedError);
+      .catch((err) => this.requestError(err, options, generation));
   }
 
   static async postResponse<T = unknown>(
@@ -844,21 +1160,14 @@ export class HydraApi {
     data?: unknown,
     options?: HydraApiOptions
   ) {
-    await this.validateOptions(url, options);
-
+    const generation = await this.validateOptions(options);
     return this.instance
-      .post<T>(url, data, {
-        ...this.getAxiosConfig(),
-        ...(options?.validateStatus
-          ? { validateStatus: options.validateStatus }
-          : {}),
-        signal: options?.signal,
+      .post<T>(url, data, this.requestConfig(options, generation))
+      .then((response) => {
+        this.assertRequestScope(options, generation);
+        return { status: response.status, data: response.data };
       })
-      .then((response) => ({
-        status: response.status,
-        data: response.data,
-      }))
-      .catch(this.handleUnauthorizedError);
+      .catch((err) => this.requestError(err, options, generation));
   }
 
   static async put<T = any>(
@@ -866,15 +1175,14 @@ export class HydraApi {
     data?: any,
     options?: HydraApiOptions
   ) {
-    await this.validateOptions(url, options);
-
+    const generation = await this.validateOptions(options);
     return this.getInstanceForUrl(url)
-      .put<T>(url, data, {
-        ...this.getAxiosConfig(url),
-        signal: options?.signal,
+      .put<T>(url, data, this.requestConfig(options, generation, url))
+      .then((response) => {
+        this.assertRequestScope(options, generation);
+        return response.data;
       })
-      .then((response) => response.data)
-      .catch(this.handleUnauthorizedError);
+      .catch((err) => this.requestError(err, options, generation));
   }
 
   static async patch<T = any>(
@@ -882,27 +1190,25 @@ export class HydraApi {
     data?: any,
     options?: HydraApiOptions
   ) {
-    await this.validateOptions(url, options);
-
+    const generation = await this.validateOptions(options);
     return this.getInstanceForUrl(url)
-      .patch<T>(url, data, {
-        ...this.getAxiosConfig(url),
-        signal: options?.signal,
+      .patch<T>(url, data, this.requestConfig(options, generation, url))
+      .then((response) => {
+        this.assertRequestScope(options, generation);
+        return response.data;
       })
-      .then((response) => response.data)
-      .catch(this.handleUnauthorizedError);
+      .catch((err) => this.requestError(err, options, generation));
   }
 
   static async delete<T = any>(url: string, options?: HydraApiOptions) {
-    await this.validateOptions(url, options);
-
+    const generation = await this.validateOptions(options);
     return this.getInstanceForUrl(url)
-      .delete<T>(url, {
-        ...this.getAxiosConfig(url),
-        signal: options?.signal,
+      .delete<T>(url, this.requestConfig(options, generation, url))
+      .then((response) => {
+        this.assertRequestScope(options, generation);
+        return response.data;
       })
-      .then((response) => response.data)
-      .catch(this.handleUnauthorizedError);
+      .catch((err) => this.requestError(err, options, generation));
   }
 
   static async checkDownloadSourcesChanges(

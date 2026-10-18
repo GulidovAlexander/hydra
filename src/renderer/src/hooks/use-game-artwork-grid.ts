@@ -7,6 +7,7 @@ import {
 } from "react";
 import type {
   ArtworkAssetType,
+  CatalogueGameIdentity,
   ArtworkItem,
   ArtworkKind,
   GameArtworkSelection,
@@ -96,6 +97,7 @@ const preloadArtworkMedia = (url: string) =>
 interface UseGameArtworkGridOptions {
   shop: GameShop;
   objectId: string;
+  lookupIdentity?: CatalogueGameIdentity;
   assetType: ArtworkAssetType;
   enabled: boolean;
   onChanged: () => Promise<void> | void;
@@ -130,6 +132,7 @@ const toArtworkItems = (
 export function useGameArtworkGrid({
   shop,
   objectId,
+  lookupIdentity,
   assetType,
   enabled,
   onChanged,
@@ -141,6 +144,8 @@ export function useGameArtworkGrid({
   gameTitle,
   steamAppId,
 }: UseGameArtworkGridOptions) {
+  const lookupShop = lookupIdentity?.shop ?? shop;
+  const lookupObjectId = lookupIdentity?.objectId ?? objectId;
   const [items, setItems] = useState<ArtworkItem[]>([]);
   const [selection, setSelection] = useState<GameArtworkSelection | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -211,8 +216,8 @@ export function useGameArtworkGrid({
 
       try {
         const result = await globalThis.window.electron.getGameArtwork(
-          shop,
-          objectId,
+          lookupShop,
+          lookupObjectId,
           ARTWORK_KIND_BY_TYPE[assetType],
           page
         );
@@ -245,7 +250,14 @@ export function useGameArtworkGrid({
         finishLoading();
       }
     },
-    [shop, objectId, assetType, onError, useCustomSgdb, loadFromSteamGridDb]
+    [
+      lookupShop,
+      lookupObjectId,
+      assetType,
+      onError,
+      useCustomSgdb,
+      loadFromSteamGridDb,
+    ]
   );
 
   const reset = useCallback(() => {
@@ -265,7 +277,7 @@ export function useGameArtworkGrid({
 
   useLayoutEffect(() => {
     reset();
-  }, [shop, objectId, assetType, reset]);
+  }, [shop, objectId, lookupShop, lookupObjectId, assetType, reset]);
 
   useEffect(() => {
     if (!enabled) return;

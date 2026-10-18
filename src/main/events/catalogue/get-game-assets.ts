@@ -1,4 +1,4 @@
-import type { GameShop, ShopAssets } from "@types";
+import type { GameAssetsOptions, GameShop, ShopAssets } from "@types";
 import { registerEvent } from "../register-event";
 import { fetchGameArtwork, HydraApi } from "@main/services";
 import {
@@ -7,6 +7,7 @@ import {
   levelKeys,
 } from "@main/level";
 import { composeAssetsWithArtwork } from "@shared";
+import { resolveEpicDefaultArtwork } from "@main/services/game-artwork";
 
 const LOCAL_CACHE_EXPIRATION = 1000 * 60 * 60 * 8; // 8 hours
 
@@ -38,45 +39,54 @@ const fallbackArtworkUrl = async (
   return null;
 };
 
-const buildMinimalAssets = async (
+const emptyAssets = (
   shop: GameShop,
   objectId: string,
   title: string
-): Promise<ShopAssets | null> => {
-  const iconUrl = await fallbackArtworkUrl(shop, objectId, "icons");
-  const logoImageUrl = await fallbackArtworkUrl(shop, objectId, "logos");
-  const libraryHeroImageUrl = await fallbackArtworkUrl(
-    shop,
-    objectId,
-    "heroes"
-  );
+): ShopAssets => ({
+  objectId,
+  shop,
+  title,
+  iconUrl: null,
+  libraryHeroImageUrl: null,
+  libraryImageUrl: null,
+  logoImageUrl: null,
+  logoPosition: null,
+  coverImageUrl: null,
+  downloadSources: [],
+});
 
-  if (!iconUrl && !logoImageUrl && !libraryHeroImageUrl) return null;
-
-  return {
-    objectId,
-    shop,
-    title,
-    iconUrl,
-    libraryHeroImageUrl,
-    libraryImageUrl: null,
-    logoImageUrl,
-    logoPosition: null,
-    coverImageUrl: null,
-    downloadSources: [],
-  };
-};
+/* Fills missing artwork from the artwork provider (SteamGridDB on self-hosted) */
+const withFallbackArtwork = async (
+  shop: GameShop,
+  objectId: string,
+  assets: ShopAssets
+): Promise<ShopAssets> => ({
+  ...assets,
+  iconUrl:
+    assets.iconUrl ?? (await fallbackArtworkUrl(shop, objectId, "icons")),
+  logoImageUrl:
+    assets.logoImageUrl ?? (await fallbackArtworkUrl(shop, objectId, "logos")),
+  libraryHeroImageUrl:
+    assets.libraryHeroImageUrl ??
+    (await fallbackArtworkUrl(shop, objectId, "heroes")),
+});
 
 export const getGameAssets = async (
   objectId: string,
   shop: GameShop,
-  options?: { forceFresh?: boolean }
+  options?: GameAssetsOptions
 ) => {
   if (shop === "custom") {
     return null;
   }
 
   const gameKey = levelKeys.game(shop, objectId);
+  const artworkIdentity = options?.artworkIdentity ?? { shop, objectId };
+  const artworkKey = levelKeys.game(
+    artworkIdentity.shop,
+    artworkIdentity.objectId
+  );
   const cachedAssets = await gamesShopAssetsSublevel.get(gameKey);
 
   if (
@@ -85,10 +95,19 @@ export const getGameAssets = async (
     cachedAssets.updatedAt + LOCAL_CACHE_EXPIRATION > Date.now() &&
     cachedAssets.iconUrl
   ) {
-    return applyArtworkSelection(gameKey, cachedAssets);
+    if (shop !== "epic") return applyArtworkSelection(artworkKey, cachedAssets);
+    const resolved = await resolveEpicDefaultArtwork(
+      cachedAssets,
+      cachedAssets
+    );
+    await gamesShopAssetsSublevel.put(gameKey, {
+      ...resolved,
+      updatedAt: cachedAssets.updatedAt,
+    });
+    return applyArtworkSelection(artworkKey, resolved);
   }
 
-  const assets = await HydraApi.get<ShopAssets | null>(
+  let assets = await HydraApi.get<ShopAssets | null>(
     `/games/${shop}/${objectId}/assets`,
     null,
     {
@@ -96,64 +115,54 @@ export const getGameAssets = async (
     }
   ).catch(() => null);
 
-  const title = assets?.title ?? cachedAssets?.title ?? "";
+  if (!assets) {
+    /* The API may not know this game (e.g. self-hosted): build what we can */
+    const title = cachedAssets?.title ?? "";
+    const minimalAssets = await withFallbackArtwork(
+      shop,
+      objectId,
+      emptyAssets(shop, objectId, title)
+    );
+    const hasArtwork =
+      minimalAssets.iconUrl ||
+      minimalAssets.logoImageUrl ||
+      minimalAssets.libraryHeroImageUrl;
 
-  if (assets) {
-    const iconUrl =
-      assets.iconUrl ?? (await fallbackArtworkUrl(shop, objectId, "icons"));
-    const logoImageUrl =
-      assets.logoImageUrl ??
-      (await fallbackArtworkUrl(shop, objectId, "logos"));
-    const libraryHeroImageUrl =
-      assets.libraryHeroImageUrl ??
-      (await fallbackArtworkUrl(shop, objectId, "heroes"));
-
-    const enrichedAssets: ShopAssets & { updatedAt: number } = {
-      ...assets,
-      iconUrl,
-      logoImageUrl,
-      libraryHeroImageUrl,
-      updatedAt: Date.now(),
-    };
-
-    await gamesShopAssetsSublevel.put(gameKey, enrichedAssets);
-
-    return applyArtworkSelection(gameKey, enrichedAssets);
-  }
-
-  const minimalAssets = await buildMinimalAssets(shop, objectId, title);
-
-  if (minimalAssets) {
     await gamesShopAssetsSublevel.put(gameKey, {
       ...minimalAssets,
       updatedAt: Date.now(),
     });
 
-    return applyArtworkSelection(gameKey, minimalAssets);
+    return hasArtwork ? applyArtworkSelection(artworkKey, minimalAssets) : null;
   }
 
+  if (shop === "epic")
+    assets = await resolveEpicDefaultArtwork(
+      assets,
+      options?.forceFresh ? null : cachedAssets
+    );
+
+  assets = await withFallbackArtwork(shop, objectId, assets);
+
+  const shouldPreserveTitle =
+    !options?.forceFresh &&
+    cachedAssets?.title &&
+    cachedAssets.title !== assets.title;
+
   await gamesShopAssetsSublevel.put(gameKey, {
-    objectId,
-    shop,
-    title,
-    iconUrl: null,
-    libraryHeroImageUrl: null,
-    libraryImageUrl: null,
-    logoImageUrl: null,
-    logoPosition: null,
-    coverImageUrl: null,
-    downloadSources: [],
+    ...assets,
+    title: shouldPreserveTitle ? cachedAssets.title : assets.title,
     updatedAt: Date.now(),
   });
 
-  return null;
+  return applyArtworkSelection(artworkKey, assets);
 };
 
 const getGameAssetsEvent = async (
   _event: Electron.IpcMainInvokeEvent,
   objectId: string,
   shop: GameShop,
-  options?: { forceFresh?: boolean }
+  options?: GameAssetsOptions
 ) => getGameAssets(objectId, shop, options);
 
 registerEvent("getGameAssets", getGameAssetsEvent);

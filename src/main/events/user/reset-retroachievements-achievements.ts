@@ -1,6 +1,5 @@
 import type { UserAchievement } from "@types";
 import { registerEvent } from "../register-event";
-import { gameAchievementsSublevel } from "@main/level";
 import { WindowManager } from "@main/services";
 import { AchievementMemoryStore } from "@main/services/achievements/achievement-memory-store";
 import {
@@ -18,25 +17,14 @@ const resetRetroAchievementsAchievements = async (
   if (pendingSouvenirsOnly) return;
   await deleteLocalSouvenirAssetsForShop("launchbox");
 
-  const entries = await gameAchievementsSublevel.iterator().all();
-
-  for (const [key, gameAchievement] of entries) {
+  for (const [key, gameAchievement] of AchievementMemoryStore.all()) {
     if (!key.startsWith(LAUNCHBOX_KEY_PREFIX)) continue;
 
     const objectId = key.slice(LAUNCHBOX_KEY_PREFIX.length);
-
-    await gameAchievementsSublevel.put(key, {
+    AchievementMemoryStore.set("launchbox", objectId, {
       ...gameAchievement,
       unlockedAchievements: [],
     });
-
-    const memoryEntry = AchievementMemoryStore.get("launchbox", objectId);
-    if (memoryEntry) {
-      AchievementMemoryStore.set("launchbox", objectId, {
-        ...memoryEntry,
-        unlockedAchievements: [],
-      });
-    }
 
     const lockedAchievements: UserAchievement[] = (
       gameAchievement.achievements ?? []

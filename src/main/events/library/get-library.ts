@@ -1,3 +1,7 @@
+import { getContextualEpicGame } from "@main/services/epic/import-visibility";
+import { epicLibraryArtworkQueue } from "@main/services/epic-library-artwork";
+import { updateGameRecord } from "@main/services/game-record-updater";
+import { logger } from "@main/services/logger";
 import path from "node:path";
 import fs from "node:fs";
 
@@ -5,15 +9,15 @@ import type { GameShop, LibraryGame } from "@types";
 import { registerEvent } from "../register-event";
 import {
   downloadsSublevel,
-  gameAchievementsSublevel,
   gamesArtworkSelectionSublevel,
   gamesShopAssetsSublevel,
   gamesShopCacheSublevel,
   gamesSublevel,
+  levelKeys,
 } from "@main/level";
 import { composeAssetsWithArtwork } from "@shared";
 import { getGameAssets } from "../catalogue/get-game-assets";
-import { WindowManager } from "@main/services";
+import { WindowManager } from "@main/services/window-manager";
 import { HydraApi } from "@main/services/hydra-api";
 import { belongsToLibraryCollection } from "@main/services/library-sync/game-visibility";
 import {
@@ -24,6 +28,8 @@ import {
 const PREFETCH_CONCURRENCY = 5;
 const LOCAL_CACHE_EXPIRATION = 1000 * 60 * 60 * 8;
 const prefetchAttempted = new Set<string>();
+
+type PrefetchEntry = { key: string; shop: GameShop; objectId: string };
 
 export const lookupCachedPlatform = async (
   gameKey: string
@@ -46,9 +52,9 @@ export const lookupCachedPlatform = async (
   return null;
 };
 
-const batchPrefetchAssets = async (
-  entries: { key: string; shop: GameShop; objectId: string }[]
-) => {
+/* Fills missing/expired artwork in the background (the fork shows SGDB
+   artwork for games the API doesn't know, e.g. on self-hosted) */
+const batchPrefetchAssets = async (entries: PrefetchEntry[]) => {
   if (entries.length === 0) return;
 
   let index = 0;
@@ -80,128 +86,171 @@ const batchPrefetchAssets = async (
 const getLibrary = async (
   collection: "visible" | "hidden" | "all" = "visible"
 ): Promise<LibraryGame[]> => {
-  const results = await gamesSublevel.iterator().all();
-  const pendingFetch: { key: string; shop: GameShop; objectId: string }[] = [];
+  const pendingFetch: PrefetchEntry[] = [];
 
-  const library = await Promise.all(
-    results
-      .filter(([_key, game]) => belongsToLibraryCollection(game, collection))
-      .map(async ([key, game]) => {
-        const download = await downloadsSublevel.get(key);
-        const gameAssets = await gamesShopAssetsSublevel.get(key);
-        const artworkSelection = await gamesArtworkSelectionSublevel.get(key);
-        const composedAssets = composeAssetsWithArtwork(
-          gameAssets ?? null,
-          artworkSelection
-        );
-        const achievements = await gameAchievementsSublevel
-          .get(key)
-          .catch(() => null);
+  return gamesSublevel
+    .iterator()
+    .all()
+    .then((results) => {
+      return Promise.all(
+        results
+          .filter(([_key, game]) =>
+            belongsToLibraryCollection(game, collection)
+          )
+          .map(async ([key, storedGame]) => {
+            const game = getContextualEpicGame(
+              storedGame,
+              HydraApi.getAuthContext()
+            );
+            if (game.isDeleted) return null;
+            const download = await downloadsSublevel.get(key);
+            const catalogueKey = game.catalogueGame
+              ? levelKeys.game(
+                  game.catalogueGame.shop,
+                  game.catalogueGame.objectId
+                )
+              : key;
+            const gameAssets = await gamesShopAssetsSublevel.get(catalogueKey);
+            const artworkSelection =
+              await gamesArtworkSelectionSublevel.get(key);
+            const composedAssets = composeAssetsWithArtwork(
+              game.shop === "epic" &&
+                game.catalogueGame?.shop !== "steam" &&
+                gameAssets &&
+                !gameAssets.epicArtworkUpdatedAtByType?.icon
+                ? { ...gameAssets, iconUrl: null }
+                : (gameAssets ?? null),
+              artworkSelection
+            );
+            const unlockedAchievementCount = resolveUnlockedAchievementCount(
+              game.shop,
+              game.objectId,
+              game.unlockedAchievementCount
+            );
+            let achievementCount = resolveAchievementCount(
+              game.shop,
+              game.objectId,
+              game.achievementCount
+            );
+            // An Epic copy without its own definitions presents its linked Steam catalogue.
+            if (
+              game.shop === "epic" &&
+              achievementCount === 0 &&
+              game.catalogueGame?.shop === "steam"
+            ) {
+              const steamGame = await gamesSublevel
+                .get(levelKeys.game("steam", game.catalogueGame.objectId))
+                .catch(() => undefined);
+              achievementCount = resolveAchievementCount(
+                "steam",
+                game.catalogueGame.objectId,
+                steamGame?.achievementCount
+              );
+            }
 
-        const validAchievementNames = new Set(
-          achievements?.achievements?.map((a) =>
-            (a.name ?? "").toUpperCase()
-          ) || []
-        );
+            // Verify installer still exists, clear if deleted externally
+            let installerSizeInBytes = game.installerSizeInBytes;
+            if (installerSizeInBytes && download?.folderName) {
+              const installerPath = path.join(
+                download.downloadPath,
+                download.folderName
+              );
 
-        const unlockedAchievementCount =
-          achievements?.unlockedAchievements?.filter(
-            (unlocked) =>
-              validAchievementNames.has((unlocked.name ?? "").toUpperCase()) &&
-              unlocked.unlockTime > 0
-          ).length ??
-          resolveUnlockedAchievementCount(
-            game.shop,
-            game.objectId,
-            game.unlockedAchievementCount
-          );
+              if (!fs.existsSync(installerPath)) {
+                installerSizeInBytes = null;
+                updateGameRecord(key, { installerSizeInBytes: null }).catch(
+                  (error) =>
+                    logger.error(
+                      `Failed to clear missing installer size for ${key}`,
+                      error
+                    )
+                );
+              }
+            }
 
-        const achievementCount =
-          achievements?.achievements?.length ||
-          resolveAchievementCount(
-            game.shop,
-            game.objectId,
-            game.achievementCount
-          );
+            if (
+              game.shop === "launchbox" &&
+              (!game.platform || game.platform === null)
+            ) {
+              const cachedPlatform = await lookupCachedPlatform(key);
+              if (cachedPlatform) {
+                game.platform = cachedPlatform;
+                updateGameRecord(key, { platform: game.platform }).catch(
+                  () => {}
+                );
+              }
+            }
 
-        // Verify installer still exists, clear if deleted externally
-        let installerSizeInBytes = game.installerSizeInBytes;
-        if (installerSizeInBytes && download?.folderName) {
-          const installerPath = path.join(
-            download.downloadPath,
-            download.folderName
-          );
+            // Verify installed folder still exists, clear if deleted externally
+            let installedSizeInBytes = game.installedSizeInBytes;
+            if (installedSizeInBytes && game.executablePath) {
+              const executableDir = path.dirname(game.executablePath);
 
-          if (!fs.existsSync(installerPath)) {
-            installerSizeInBytes = null;
-            gamesSublevel.put(key, { ...game, installerSizeInBytes: null });
-          }
-        }
+              if (!fs.existsSync(executableDir)) {
+                installedSizeInBytes = null;
+                updateGameRecord(key, {
+                  installerSizeInBytes,
+                  installedSizeInBytes: null,
+                }).catch((error) =>
+                  logger.error(
+                    `Failed to clear missing installed size for ${key}`,
+                    error
+                  )
+                );
+              }
+            }
 
-        if (
-          game.shop === "launchbox" &&
-          (!game.platform || game.platform === null)
-        ) {
-          const cachedPlatform = await lookupCachedPlatform(key);
-          if (cachedPlatform) {
-            game.platform = cachedPlatform;
-            gamesSublevel.put(key, game).catch(() => {});
-          }
-        }
+            // Epic copies have their own artwork queue (scheduled below)
+            if (
+              game.shop !== "custom" &&
+              game.shop !== "epic" &&
+              catalogueKey === key &&
+              (gameAssets == null ||
+                gameAssets.updatedAt + LOCAL_CACHE_EXPIRATION < Date.now() ||
+                (!gameAssets.iconUrl && !prefetchAttempted.has(key)))
+            ) {
+              prefetchAttempted.add(key);
+              pendingFetch.push({
+                key,
+                shop: game.shop,
+                objectId: game.objectId,
+              });
+            }
 
-        // Verify installed folder still exists, clear if deleted externally
-        let installedSizeInBytes = game.installedSizeInBytes;
-        if (installedSizeInBytes && game.executablePath) {
-          const executableDir = path.dirname(game.executablePath);
-
-          if (!fs.existsSync(executableDir)) {
-            installedSizeInBytes = null;
-            gamesSublevel.put(key, {
+            return {
+              id: key,
               ...game,
               installerSizeInBytes,
-              installedSizeInBytes: null,
-            });
-          }
-        }
-
-        if (
-          game.shop !== "custom" &&
-          (gameAssets == null ||
-            gameAssets.updatedAt + LOCAL_CACHE_EXPIRATION < Date.now() ||
-            (!gameAssets.iconUrl && !prefetchAttempted.has(key)))
-        ) {
-          prefetchAttempted.add(key);
-          pendingFetch.push({
-            key,
-            shop: game.shop,
-            objectId: game.objectId,
-          });
-        }
-
-        return {
-          id: key,
-          ...game,
-          installerSizeInBytes,
-          installedSizeInBytes,
-          download: download ?? null,
-          unlockedAchievementCount,
-          achievementCount,
-          // Spread composed assets last to ensure all image URLs are properly set
-          ...composedAssets,
-          title: composedAssets?.title || game.title,
-          platform: game.platform ?? null,
-          // Preserve custom image URLs from game if they exist
-          customIconUrl: game.customIconUrl,
-          customLogoImageUrl: game.customLogoImageUrl,
-          customHeroImageUrl: game.customHeroImageUrl,
-          customCoverImageUrl: game.customCoverImageUrl,
-        };
-      })
-  );
-
-  batchPrefetchAssets(pendingFetch);
-
-  return library;
+              installedSizeInBytes,
+              download: download ?? null,
+              // Spread composed assets last to ensure all image URLs are properly set
+              ...composedAssets,
+              shop: game.shop,
+              objectId: game.objectId,
+              unlockedAchievementCount,
+              achievementCount,
+              ...(game.shop === "epic" &&
+                game.catalogueGame?.shop !== "steam" && {
+                  iconUrl: composedAssets?.iconUrl ?? null,
+                }),
+              title: composedAssets?.title || game.title,
+              platform: game.platform ?? null,
+              // Preserve custom image URLs from game if they exist
+              customIconUrl: game.customIconUrl,
+              customLogoImageUrl: game.customLogoImageUrl,
+              customHeroImageUrl: game.customHeroImageUrl,
+              customCoverImageUrl: game.customCoverImageUrl,
+            };
+          })
+      ).then((games) => {
+        const library = games.filter(
+          (game): game is NonNullable<typeof game> => game !== null
+        );
+        if (HydraApi.isLoggedIn()) epicLibraryArtworkQueue.schedule(library);
+        void batchPrefetchAssets(pendingFetch);
+        return library;
+      });
+    });
 };
 
 registerEvent("getLibrary", (_event, includeConcealed = false) =>

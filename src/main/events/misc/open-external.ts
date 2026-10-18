@@ -1,17 +1,24 @@
 import { shell } from "electron";
-import { logger } from "@main/services/logger";
 import { registerEvent } from "../register-event";
+import { parseExternalUrl } from "@main/helpers/external-url";
+import { logger } from "@main/services";
+
+const LOGGED_ADDRESS_MAX_LENGTH = 200;
 
 const openExternal = async (
   _event: Electron.IpcMainInvokeEvent,
   src: string
 ) => {
-  try {
-    return await shell.openExternal(src);
-  } catch (error) {
-    logger.error("Failed to open external URL", src, error);
-    throw error;
+  const url = parseExternalUrl(src);
+
+  if (!url) {
+    logger.warn("Refused to open a non-web address externally", {
+      src: String(src).slice(0, LOGGED_ADDRESS_MAX_LENGTH),
+    });
+    return;
   }
+
+  await shell.openExternal(url);
 };
 
 registerEvent("openExternal", openExternal);

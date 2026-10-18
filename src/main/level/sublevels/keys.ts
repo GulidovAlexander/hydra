@@ -12,7 +12,6 @@ export const levelKeys = {
   gameShopCache: "gameShopCache",
   gameShopCacheItem: (shop: GameShop, objectId: string, language: string) =>
     `${shop}:${objectId}:${language}`,
-  gameAchievements: "gameAchievements",
   downloads: "downloads",
   downloadLayoutState: "downloadLayoutState",
   userPreferences: "userPreferences",
@@ -45,9 +44,9 @@ export const levelKeys = {
   cloudSaveV2DefaultMigration: "cloud-save-v2-default-migration",
   gameVisibilityRenameMigration: "game-visibility-rename-migration",
   cloudSaveCustomPaths: "cloud-save-custom-paths",
-  cloudSaveRpcs3ProfileBindings: "cloud-save-rpcs3-profile-bindings",
   cloudSaveEmulatorDestinations: "cloud-save-emulator-destinations",
   cloudSaveRetroArchBindings: "cloud-save-retroarch-bindings",
   cloudSavePendingDeletions: "cloud-save-pending-deletions",
   steamSyncRun: "steamSyncRun",
+  chatNotificationCursor: "chatNotificationCursor", // Newest chat message already announced
 };

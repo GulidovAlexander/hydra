@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isVideoArtworkUrl } from "@renderer/hooks";
 import { useBigPictureToast } from "../../../../hooks";
+import { getGameCatalogueIdentity } from "@shared";
 import {
   BumperBadge,
   FileExplorerModal,
@@ -256,7 +257,10 @@ export function GameCustomizationSettingsTab({
   const [pendingAssetTab, setPendingAssetTab] = useState<AssetTab | null>(null);
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
   const isCustomGame = game.shop === "custom";
+  const catalogueGame = getGameCatalogueIdentity(game);
+  const artworkRequestRef = useRef(0);
   const refreshArtworkState = useCallback(async () => {
+    const requestId = ++artworkRequestRef.current;
     if (game.shop === "custom") {
       setComposedAssets(null);
       setArtworkSelection(null);
@@ -264,15 +268,20 @@ export function GameCustomizationSettingsTab({
     }
 
     const [assets, selection] = await Promise.all([
-      globalThis.window.electron.getGameAssets(game.objectId, game.shop),
+      globalThis.window.electron.getGameAssets(
+        catalogueGame.objectId,
+        catalogueGame.shop,
+        { artworkIdentity: { shop: game.shop, objectId: game.objectId } }
+      ),
       globalThis.window.electron.getGameArtworkSelection(
         game.shop,
         game.objectId
       ),
     ]);
+    if (requestId !== artworkRequestRef.current) return;
     setComposedAssets(assets);
     setArtworkSelection(selection);
-  }, [game.objectId, game.shop]);
+  }, [catalogueGame.objectId, catalogueGame.shop, game.objectId, game.shop]);
 
   const [sgdbQuery, setSgdbQuery] = useState("");
   const [sgdbResults, setSgdbResults] = useState<
@@ -499,7 +508,12 @@ export function GameCustomizationSettingsTab({
   ]);
 
   useEffect(() => {
+    setComposedAssets(null);
+    setArtworkSelection(null);
     refreshArtworkState().catch(() => {});
+    return () => {
+      artworkRequestRef.current += 1;
+    };
   }, [refreshArtworkState]);
 
   useEffect(() => {

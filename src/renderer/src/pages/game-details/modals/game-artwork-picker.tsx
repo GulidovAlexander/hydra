@@ -22,7 +22,12 @@ import {
   useToast,
   useUserDetails,
 } from "@renderer/hooks";
-import type { ArtworkAssetType, ArtworkItem, LibraryGame } from "@types";
+import type {
+  ArtworkAssetType,
+  ArtworkItem,
+  LibraryGame,
+  CatalogueGameIdentity,
+} from "@types";
 
 import "./game-artwork-picker.scss";
 
@@ -139,6 +144,7 @@ function ArtworkTile({
 
 interface GameArtworkPickerProps {
   game: LibraryGame;
+  lookupIdentity?: CatalogueGameIdentity;
   assetType: ArtworkAssetType;
   onChanged: () => Promise<void> | void;
   onSelectArtwork: (artwork: {
@@ -397,6 +403,7 @@ function ArtworkScrollbar({
 
 export function GameArtworkPicker({
   game,
+  lookupIdentity,
   assetType,
   onChanged,
   onSelectArtwork,
@@ -437,6 +444,7 @@ export function GameArtworkPicker({
   } = useGameArtworkGrid({
     shop: game.shop,
     objectId: game.objectId,
+    lookupIdentity,
     assetType,
     enabled: Boolean(userDetails),
     onChanged,

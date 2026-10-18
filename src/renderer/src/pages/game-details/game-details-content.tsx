@@ -83,6 +83,8 @@ export function GameDetailsContent() {
     objectId,
     shopDetails,
     game,
+    presentation,
+    catalogueGame,
     hasNSFWContentBlocked,
     shop,
     setShowGameOptionsModal,
@@ -155,6 +157,7 @@ export function GameDetailsContent() {
     playTimeInMilliseconds: getDisplayedPlayTimeInMilliseconds({
       playTimeInMilliseconds: game?.playTimeInMilliseconds ?? 0,
       steamPlayTimeInMilliseconds: game?.steamPlayTimeInMilliseconds,
+      epicPlayTimeInMilliseconds: game?.epicPlayTimeInMilliseconds,
     }),
     userDetailsId: userDetails?.id,
     isGameInLibrary,
@@ -246,7 +249,7 @@ export function GameDetailsContent() {
   const heroImage = isCustomGame
     ? game?.libraryHeroImageUrl || game?.iconUrl || ""
     : getImageWithCustomPriority(
-        game?.customHeroImageUrl,
+        (presentation ?? game)?.customHeroImageUrl,
         shopDetails?.assets?.libraryHeroImageUrl
       );
 
@@ -429,7 +432,10 @@ export function GameDetailsContent() {
             <div className="game-details__hero-content">
               {!renderClassicsHero && (
                 <div className="game-details__hero-standard-meta">
-                  <GameLogo game={game} shopDetails={shopDetails} />
+                  <GameLogo
+                    game={presentation ?? game}
+                    shopDetails={shopDetails}
+                  />
                   {classicsChips}
                 </div>
               )}
@@ -519,7 +525,10 @@ export function GameDetailsContent() {
             )}
 
             {shop && objectId && (
-              <SimilarGames objectId={objectId} shop={shop} />
+              <SimilarGames
+                objectId={catalogueGame.objectId}
+                shop={catalogueGame.shop}
+              />
             )}
 
             {shop !== "custom" && shop && objectId && (

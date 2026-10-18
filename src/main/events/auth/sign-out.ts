@@ -9,57 +9,41 @@ import {
 } from "@main/services";
 import { clearGamesPlaytimeState } from "@main/services/game-running-state";
 import {
-  db,
   downloadLayoutStateSublevel,
   downloadsSublevel,
   gamesSublevel,
-  levelKeys,
 } from "@main/level";
 
 const signOut = async (_event: Electron.IpcMainInvokeEvent) => {
   const isSelfHostedActive = HydraApi.isSelfHostedAuthenticated();
   SSEClient.close();
 
-  const databaseOperations = db
-    .batch([
-      {
-        type: "del",
-        key: levelKeys.auth,
-      },
-      {
-        type: "del",
-        key: levelKeys.user,
-      },
-    ])
-    .then(() => {
-      /* Removes all games being played */
-      clearGamesPlaytimeState();
-
-      if (isSelfHostedActive) return;
-
-      return Promise.all([
-        gamesSublevel.clear(),
-        downloadsSublevel.clear(),
-        downloadLayoutStateSublevel.clear(),
-        emulators.resetEmulatorScanData(),
-        retroarch.resetRetroArchScanData(),
-      ]);
-    });
-
   /* Cancels any ongoing downloads */
   DownloadManager.cancelDownload();
 
-  await HydraApi.handleSignOut();
+  await HydraApi.handleSignOut(async () => {
+    /* Removes all games being played */
+    clearGamesPlaytimeState();
 
-  /* The friends window is only meaningful while signed in */
-  WindowManager.closeFriendsWindow();
+    /* Self-hosted keeps the local library; only the session is dropped */
+    if (isSelfHostedActive) return;
 
-  await Promise.all([
-    databaseOperations,
-    HydraApi.post("/auth/logout").catch(() => {}),
-  ]);
+    const results = await Promise.allSettled([
+      gamesSublevel.clear(),
+      downloadsSublevel.clear(),
+      downloadLayoutStateSublevel.clear(),
+      emulators.resetEmulatorScanData(),
+      retroarch.resetRetroArchScanData(),
+    ]);
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
+  });
 
-  SSEClient.close();
+  /* The friends and chat windows are only meaningful while signed in */
+  if (!HydraApi.isLoggedIn()) {
+    WindowManager.closeFriendsWindow();
+    WindowManager.closeChatWindow();
+  }
 };
 
 registerEvent("signOut", signOut);

@@ -1,28 +1,43 @@
+import { achievementSyncCoordinator } from "./achievement-sync-coordinator";
 import { HydraApi } from "../hydra-api";
+import type { HydraApiOptions } from "../hydra-api";
 import type { GameShop, SteamAchievement } from "@types";
 import { UserNotLoggedInError } from "@shared";
 import { logger } from "../logger";
-import { db, gameAchievementsSublevel, levelKeys } from "@main/level";
+import { db, levelKeys } from "@main/level";
 import { AchievementMemoryStore } from "./achievement-memory-store";
 
 export const getGameAchievementData = async (
   objectId: string,
   shop: GameShop,
-  useCachedData: boolean
+  useCachedData: boolean,
+  current?: () => boolean,
+  requestOptions?: Pick<HydraApiOptions, "signal" | "timeout">
 ) => {
+  const context = HydraApi.getAuthContext();
+  const valid =
+    current ??
+    achievementSyncCoordinator.captureCurrent(
+      levelKeys.game(shop, objectId),
+      () =>
+        context
+          ? HydraApi.isAuthContextCurrent(context)
+          : HydraApi.getAuthContext() === null
+    );
+
   if (shop === "custom") {
     return [];
   }
 
-  const gameKey = levelKeys.game(shop, objectId);
-
-  const cachedAchievements = await gameAchievementsSublevel.get(gameKey);
+  const cachedAchievements = AchievementMemoryStore.get(shop, objectId);
 
   const language = await db
     .get<string, string>(levelKeys.language, {
       valueEncoding: "utf8",
     })
     .then((language) => language || "en");
+
+  if (!valid()) return [];
 
   if (
     useCachedData &&
@@ -36,6 +51,7 @@ export const getGameAchievementData = async (
     `/games/${shop}/${objectId}/achievements`,
     { language },
     {
+      ...requestOptions,
       ifNoneMatch:
         cachedAchievements?.language === language
           ? cachedAchievements.catalogueValidator
@@ -45,38 +61,26 @@ export const getGameAchievementData = async (
     }
   )
     .then(async (response) => {
+      if (!valid()) return [];
       if (response.status === 304) {
         return cachedAchievements?.achievements ?? [];
       }
 
       const achievements =
-        response.data.length > 0
+        response.data.length > 0 || shop === "epic"
           ? response.data
           : (cachedAchievements?.achievements ?? []);
 
-      const unlockedAchievements =
-        cachedAchievements?.unlockedAchievements ?? [];
-      const catalogueValidator =
-        typeof response.headers.etag === "string"
-          ? response.headers.etag
-          : undefined;
-
-      await gameAchievementsSublevel.put(gameKey, {
-        unlockedAchievements,
-        achievements,
-        updatedAt: Date.now(),
-        language,
-        catalogueValidator,
-      });
-
-      const memoryEntry = AchievementMemoryStore.get(shop, objectId);
       AchievementMemoryStore.set(shop, objectId, {
-        achievements,
         unlockedAchievements:
-          memoryEntry?.unlockedAchievements ?? unlockedAchievements,
+          AchievementMemoryStore.get(shop, objectId)?.unlockedAchievements ??
+          [],
+        achievements,
         language,
         catalogueValidator:
-          memoryEntry?.catalogueValidator ?? catalogueValidator,
+          typeof response.headers.etag === "string"
+            ? response.headers.etag
+            : undefined,
       });
 
       return achievements;

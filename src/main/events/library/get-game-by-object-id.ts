@@ -1,10 +1,8 @@
+import { getContextualEpicGame } from "@main/services/epic/import-visibility";
+import { HydraApi } from "@main/services/hydra-api";
+import { updateGameRecord } from "@main/services/game-record-updater";
 import { registerEvent } from "../register-event";
-import {
-  gamesSublevel,
-  downloadsSublevel,
-  gameAchievementsSublevel,
-  levelKeys,
-} from "@main/level";
+import { gamesSublevel, downloadsSublevel, levelKeys } from "@main/level";
 import type { GameShop } from "@types";
 import {
   resolveAchievementCount,
@@ -18,41 +16,33 @@ const getGameByObjectId = async (
   objectId: string
 ) => {
   const gameKey = levelKeys.game(shop, objectId);
-  const [game, download, achievements] = await Promise.all([
+  const [storedGame, download] = await Promise.all([
     gamesSublevel.get(gameKey),
     downloadsSublevel.get(gameKey),
-    gameAchievementsSublevel.get(gameKey).catch(() => null),
   ]);
 
-  if (!game || game.isDeleted) return null;
+  if (!storedGame) return null;
+  const game = getContextualEpicGame(storedGame, HydraApi.getAuthContext());
+  if (game.isDeleted) return null;
 
   if (game.shop === "launchbox" && !game.platform) {
     const cachedPlatform = await lookupCachedPlatform(gameKey);
     if (cachedPlatform) {
       game.platform = cachedPlatform;
-      gamesSublevel.put(gameKey, game).catch(() => {});
+      updateGameRecord(gameKey, { platform: game.platform }).catch(() => {});
     }
   }
 
-  const validAchievementNames = new Set(
-    achievements?.achievements?.map((a) => (a.name ?? "").toUpperCase()) || []
+  const unlockedAchievementCount = resolveUnlockedAchievementCount(
+    shop,
+    objectId,
+    game.unlockedAchievementCount
   );
-
-  const unlockedAchievementCount =
-    achievements?.unlockedAchievements?.filter(
-      (unlocked) =>
-        validAchievementNames.has((unlocked.name ?? "").toUpperCase()) &&
-        unlocked.unlockTime > 0
-    ).length ??
-    resolveUnlockedAchievementCount(
-      shop,
-      objectId,
-      game.unlockedAchievementCount
-    );
-
-  const achievementCount =
-    achievements?.achievements?.length ||
-    resolveAchievementCount(shop, objectId, game.achievementCount);
+  const achievementCount = resolveAchievementCount(
+    shop,
+    objectId,
+    game.achievementCount
+  );
 
   return {
     ...game,

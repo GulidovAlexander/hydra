@@ -10,6 +10,7 @@ import { createGame } from "@main/services/library-sync";
 import { downloadsSublevel, gamesSublevel, levelKeys } from "@main/level";
 import { parseBytes } from "@shared";
 import {
+  getGlobalTrackers,
   handleDownloadError,
   isKnownDownloadError,
   prepareGameEntry,
@@ -35,31 +36,40 @@ const addGameToQueue = async (
 
   const parsedFileSize = parseBytes(fileSize ?? null);
   const gameKey = levelKeys.game(shop, objectId);
-
-  const download: Download = {
-    shop,
-    objectId,
-    status: "paused",
-    progress: 0,
-    bytesDownloaded: 0,
-    downloadPath,
-    downloader,
-    uri,
-    folderName: null,
-    fileSize: selectedFilesSize ?? parsedFileSize,
-    shouldSeed: false,
-    timestamp: Date.now(),
-    queued: true,
-    pinnedToHero: false,
-    extracting: false,
-    automaticallyExtract,
-    automaticallyDeleteArchiveFiles,
-    fileIndices,
-    selectedFilesSize,
-  };
+  let download: Download;
+  let didWriteDownload = false;
 
   try {
-    await DownloadManager.validateDownloadUrl(download);
+    const globalTrackers = await getGlobalTrackers();
+
+    download = {
+      shop,
+      objectId,
+      status: "paused",
+      progress: 0,
+      bytesDownloaded: 0,
+      downloadPath,
+      downloader,
+      uri,
+      folderName: null,
+      fileSize: selectedFilesSize ?? parsedFileSize,
+      shouldSeed: false,
+      timestamp: Date.now(),
+      queued: false,
+      pinnedToHero: false,
+      extracting: false,
+      automaticallyExtract,
+      automaticallyDeleteArchiveFiles,
+      fileIndices,
+      selectedFilesSize,
+      customTrackers: globalTrackers,
+    };
+
+    if (!DownloadOrchestrator.preparesRealDebridInBackground(download)) {
+      await DownloadOrchestrator.validateDownloadOrMarkPending(download);
+    }
+    await prepareGameEntry({ gameKey, title, objectId, shop });
+    await DownloadManager.cancelDownload(gameKey).catch(() => null);
   } catch (err: unknown) {
     if (isKnownDownloadError(err)) {
       logger.warn(
@@ -72,10 +82,9 @@ const addGameToQueue = async (
     return handleDownloadError(err, downloader);
   }
 
-  await prepareGameEntry({ gameKey, title, objectId, shop });
-
   try {
     await downloadsSublevel.put(gameKey, download);
+    didWriteDownload = true;
     await DownloadOrchestrator.enqueuePreparedDownload(download);
 
     const updatedGame = await gamesSublevel.get(gameKey);
@@ -89,6 +98,12 @@ const addGameToQueue = async (
 
     return { ok: true };
   } catch (err: unknown) {
+    if (didWriteDownload) {
+      await DownloadManager.cancelDownload(gameKey).catch(() => null);
+      await downloadsSublevel.del(gameKey).catch(() => null);
+      await DownloadOrchestrator.syncAfterDownloadRemoved({ shop, objectId });
+    }
+
     logger.error("Failed to add game to queue", err);
 
     if (err instanceof Error) {
